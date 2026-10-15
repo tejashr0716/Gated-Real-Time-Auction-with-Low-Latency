@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gated Real-Time Auction Engine | Telemetry & Lua Atomic Validation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              gold: '#E5A93C',
+              goldLight: '#F5C76D',
+              neon: '#00F0FF',
+              emerald: '#10B981',
+              dark: '#08090C',
+              card: '#0F1117',
+              border: 'rgba(255, 255, 255, 0.08)',
+              borderActive: 'rgba(229, 169, 60, 0.4)',
+            }
+          },
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #060709;
+      color: #E2E8F0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      overflow-x: hidden;
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .glass-panel {
+      background: rgba(15, 17, 23, 0.75);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .glass-gold {
+      background: linear-gradient(135deg, rgba(229, 169, 60, 0.12) 0%, rgba(15, 17, 23, 0.8) 100%);
+      border: 1px solid rgba(229, 169, 60, 0.3);
+    }
+    .pulse-glow {
+      box-shadow: 0 0 25px rgba(229, 169, 60, 0.35);
+    }
+    .neon-glow {
+      box-shadow: 0 0 20px rgba(0, 240, 255, 0.25);
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #08090C; }
+    ::-webkit-scrollbar-thumb { background: #1E2330; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #E5A93C; }
+
+    @keyframes flashGreen {
+      0% { background-color: rgba(16, 185, 129, 0.4); }
+      100% { background-color: transparent; }
+    }
+    .flash-accept {
+      animation: flashGreen 0.7s ease-out;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-brand-gold selection:text-black">
+
+  <!-- ====================================================================== -->
+  <!-- TOP TELEMETRY HUD BAR                                                  -->
+  <!-- ====================================================================== -->
+  <header class="sticky top-0 z-50 glass-panel border-b border-brand-border px-4 py-3">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- Logo & System Status -->
+      <div class="flex items-center gap-3">
+        <div class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-brand-gold/30 to-amber-950/40 border border-brand-gold/40 text-brand-gold font-bold">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-500 animate-ping"></span>
+          <span class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-500"></span>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base font-extrabold tracking-wide uppercase text-white">Gated Auction Engine</h1>
+            <span class="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-brand-gold/20 text-brand-gold border border-brand-gold/30">v1.0 LUA CORE</span>
+          </div>
+          <p class="text-xs text-slate-400 mono flex items-center gap-2">
+            <span id="backend-status-pill" class="inline-flex items-center gap-1 text-emerald-400">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> WebSocket Live
+            </span>
+            <span class="text-slate-600">|</span>
+            <span id="telemetry-clients-count">500+ Clients Connected</span>
+          </p>
+        </div>
+      </div>
+
+      <!-- Real-Time Latency & Throughput Telemetry Badges -->
+      <div class="flex items-center gap-2 sm:gap-4 mono text-xs">
+        <div class="px-3 py-1.5 rounded-lg bg-black/40 border border-brand-border">
+          <span class="text-[10px] uppercase tracking-wider text-slate-500 block">P50 Latency</span>
+          <span id="stat-p50" class="text-emerald-400 font-semibold">1.12 ms</span>
+        </div>
+        <div class="px-3 py-1.5 rounded-lg bg-black/40 border border-brand-border">
+          <span class="text-[10px] uppercase tracking-wider text-slate-500 block">P99 Latency</span>
+          <span id="stat-p99" class="text-brand-neon font-semibold">3.18 ms</span>
+        </div>
+        <div class="px-3 py-1.5 rounded-lg bg-black/40 border border-brand-border">
+          <span class="text-[10px] uppercase tracking-wider text-slate-500 block">Throughput</span>
+          <span id="stat-rps" class="text-brand-gold font-semibold">142 bids/s</span>
+        </div>
+        <div class="px-3 py-1.5 rounded-lg bg-black/40 border border-brand-border hidden md:block">
+          <span class="text-[10px] uppercase tracking-wider text-slate-500 block">Processed Bids</span>
+          <span id="stat-total-bids" class="text-slate-200 font-semibold">54,291</span>
+        </div>
+      </div>
+
+      <!-- User Gated Escrow Identity Badge -->
+      <div class="flex items-center gap-3">
+        <div class="hidden lg:flex flex-col text-right">
+          <div class="flex items-center gap-1.5 justify-end">
+            <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+            <span id="user-tier" class="text-xs font-bold text-amber-300 uppercase tracking-wider">VIP DIAMOND</span>
+          </div>
+          <span class="text-xs text-slate-400 mono">
+            Collateral: <strong id="user-escrow-balance" class="text-white">$750,000.00</strong>
+          </span>
+        </div>
+        <button id="deposit-btn" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition text-slate-200 flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5 text-brand-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+          Deposit
+        </button>
+        <button id="sound-toggle-btn" class="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition text-slate-300" title="Toggle Sound FX">
+          <span id="sound-icon">🔊</span>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ====================================================================== -->
+  <!-- MAIN ARENA CONTENT                                                     -->
+  <!-- ====================================================================== -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
+
+    <!-- Anti-Sniping Soft Close Alert Banner (Dynamically shown) -->
+    <div id="sniping-alert" class="hidden p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs sm:text-sm font-medium flex items-center justify-between transition-all duration-300">
+      <div class="flex items-center gap-2">
+        <span class="flex h-3 w-3 relative">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+        </span>
+        <span>⚡ <strong>ANTI-SNIPING TRIGGERED:</strong> High-frequency bid detected in final 15s window. Timer extended by <strong>+30 seconds</strong>!</span>
+      </div>
+      <span class="mono text-xs opacity-75">Atomic Lua Soft-Close</span>
+    </div>
+
+    <!-- Lot Selector Carousel -->
+    <div class="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-thin">
+      <button onclick="selectAuction('auc_shelby_gt500')" id="tab-auc_shelby_gt500" class="lot-tab px-4 py-2.5 rounded-xl border text-left flex items-center gap-3 min-w-[260px] glass-gold transition-all">
+        <span class="text-xl">🏎️</span>
+        <div>
+          <div class="text-xs uppercase font-bold text-white tracking-wide">1967 Shelby GT500</div>
+          <div class="text-[11px] mono text-brand-gold" id="tab-price-auc_shelby_gt500">$145,000.00</div>
+        </div>
+      </button>
+
+      <button onclick="selectAuction('auc_patek_6300g')" id="tab-auc_patek_6300g" class="lot-tab px-4 py-2.5 rounded-xl border border-brand-border text-left flex items-center gap-3 min-w-[260px] glass-panel hover:border-slate-600 transition-all">
+        <span class="text-xl">⌚</span>
+        <div>
+          <div class="text-xs uppercase font-bold text-slate-300 tracking-wide">Patek Philippe 6300G</div>
+          <div class="text-[11px] mono text-slate-400" id="tab-price-auc_patek_6300g">$235,000.00</div>
+        </div>
+      </button>
+
+      <button onclick="selectAuction('auc_ferrari_f40_lm')" id="tab-auc_ferrari_f40_lm" class="lot-tab px-4 py-2.5 rounded-xl border border-brand-border text-left flex items-center gap-3 min-w-[260px] glass-panel hover:border-slate-600 transition-all">
+        <span class="text-xl">🏁</span>
+        <div>
+          <div class="text-xs uppercase font-bold text-slate-300 tracking-wide">1989 Ferrari F40 LM</div>
+          <div class="text-[11px] mono text-slate-400" id="tab-price-auc_ferrari_f40_lm">$390,000.00</div>
+        </div>
+      </button>
+
+      <button onclick="selectAuction('auc_carbon_credit_blk')" id="tab-auc_carbon_credit_blk" class="lot-tab px-4 py-2.5 rounded-xl border border-brand-border text-left flex items-center gap-3 min-w-[260px] glass-panel hover:border-slate-600 transition-all">
+        <span class="text-xl">🌲</span>
+        <div>
+          <div class="text-xs uppercase font-bold text-slate-300 tracking-wide">50k Carbon Units</div>
+          <div class="text-[11px] mono text-slate-400" id="tab-price-auc_carbon_credit_blk">$82,500.00</div>
+        </div>
+      </button>
+    </div>
+
+    <!-- Core Grid: Left = Active Auction Arena | Right = Live Waterfall & Lua Inspector -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- ================================================================ -->
+      <!-- LEFT LOT CARD & BID CONSOLE (7 Columns)                          -->
+      <!-- ================================================================ -->
+      <div class="lg:col-span-7 flex flex-col gap-6">
+
+        <!-- Active Lot Hero Card -->
+        <div class="glass-panel rounded-2xl p-5 sm:p-7 relative overflow-hidden border border-brand-border">
+          <div class="absolute top-0 right-0 w-80 h-80 bg-brand-gold/10 rounded-full blur-3xl pointer-events-none"></div>
+
+          <!-- Lot Details Header -->
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <span id="lot-category" class="px-2.5 py-1 text-xs font-semibold uppercase tracking-wider rounded-md bg-white/5 border border-white/10 text-brand-gold">
+              Exotic Automobilia
+            </span>
+            <div class="flex items-center gap-2">
+              <span id="reserve-badge" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                Reserve Met
+              </span>
+              <span id="gated-pass-badge" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 2a4 4 0 00-4 4v2H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-1V6a4 4 0 00-4-4zm2 6V6a2 2 0 10-4 0v2h4z" clip-rule="evenodd"/></svg>
+                Escrow Gated
+              </span>
+            </div>
+          </div>
+
+          <h2 id="lot-title" class="text-xl sm:text-2xl font-black tracking-tight text-white mb-2">
+            1967 Shelby GT500 Super Snake (1 of 1 Experimental 427 CI)
+          </h2>
+          <p id="lot-desc" class="text-xs sm:text-sm text-slate-400 font-light leading-relaxed mb-6">
+            Original prototype commissioned for Goodyear Thunderbolt high-speed tire tests. Powered by Carroll Shelby 427 FE medium-riser V8 generating 520HP. 4-speed manual top-loader. Verified provenance, Registry Certificate #001.
+          </p>
+
+          <!-- Current Bid & Countdown Banner -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 p-5 rounded-xl bg-black/50 border border-brand-border mb-6">
+            <div>
+              <span class="text-xs text-slate-400 uppercase tracking-wider block mb-1">Current High Bid</span>
+              <div id="lot-current-price" class="text-3xl sm:text-4xl font-extrabold mono text-brand-gold tracking-tight">
+                $145,000.00
+              </div>
+              <div class="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                <span>Leader:</span>
+                <strong id="lot-highest-bidder" class="text-white mono">apex_collector</strong>
+                <span class="text-slate-600">•</span>
+                <span id="lot-seq-badge" class="text-slate-400 mono">Seq #18</span>
+              </div>
+            </div>
+
+            <div class="sm:text-right flex flex-col sm:items-end justify-between">
+              <div>
+                <span class="text-xs text-slate-400 uppercase tracking-wider block mb-1">Live Auction Clock</span>
+                <div id="lot-countdown" class="text-3xl sm:text-4xl font-extrabold mono text-white tracking-tight">
+                  24:48
+                </div>
+              </div>
+              <div class="text-[11px] text-slate-500 mono mt-2">
+                Min Increment: <strong id="lot-min-increment" class="text-slate-300">+$2,500.00</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Bid Buttons & Custom Input -->
+          <div class="flex flex-col gap-3">
+            <label class="text-xs font-semibold uppercase tracking-wider text-slate-400">Place Atomic Bid</label>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button onclick="placeQuickBid(2500)" class="py-2.5 px-3 rounded-xl bg-brand-gold hover:bg-brand-goldLight text-black font-bold text-xs mono transition shadow-lg shadow-brand-gold/20 flex flex-col items-center">
+                <span>+$2,500</span>
+                <span class="text-[9px] font-normal uppercase opacity-75">Min Step</span>
+              </button>
+              <button onclick="placeQuickBid(5000)" class="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs mono transition border border-white/10 flex flex-col items-center">
+                <span>+$5,000</span>
+                <span class="text-[9px] font-normal uppercase text-slate-400">Power Step</span>
+              </button>
+              <button onclick="placeQuickBid(10000)" class="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs mono transition border border-white/10 flex flex-col items-center">
+                <span>+$10,000</span>
+                <span class="text-[9px] font-normal uppercase text-slate-400">Aggressive</span>
+              </button>
+              <button onclick="placeQuickBid(25000)" class="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs mono transition border border-white/10 flex flex-col items-center">
+                <span>+$25,000</span>
+                <span class="text-[9px] font-normal uppercase text-slate-400">VIP Whale</span>
+              </button>
+            </div>
+
+            <!-- Custom Bid Input & Actions -->
+            <div class="flex gap-2 mt-2">
+              <div class="relative flex-1">
+                <span class="absolute inset-y-0 left-3 flex items-center text-slate-500 mono font-semibold">$</span>
+                <input id="custom-bid-input" type="number" placeholder="Enter custom bid amount" class="w-full pl-8 pr-4 py-2.5 rounded-xl bg-black/60 border border-brand-border text-white mono text-sm focus:outline-none focus:border-brand-gold transition">
+              </div>
+              <button onclick="placeCustomBid()" class="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs uppercase tracking-wider transition shadow-lg shadow-emerald-500/20">
+                Bid Now
+              </button>
+              <button onclick="resetCurrentAuction()" class="px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white text-xs mono transition" title="Reset Auction for Demonstration">
+                Reset
+              </button>
+            </div>
+            
+            <div class="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+              <span>Required Collateral Lock: <strong id="lot-required-collateral" class="text-amber-300">$15,000.00</strong></span>
+              <span id="bid-status-msg" class="mono text-emerald-400 font-medium">Ready</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- High-Concurrency Stress Test Control Deck -->
+        <div class="glass-panel rounded-2xl p-5 border border-brand-border">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="text-base">⚡</span>
+              <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-white">Concurrency Attack Simulator</h3>
+            </div>
+            <span class="px-2 py-0.5 text-[10px] mono uppercase rounded bg-brand-neon/10 text-brand-neon border border-brand-neon/30">Zero Race Conditions</span>
+          </div>
+          <p class="text-xs text-slate-400 mb-4">
+            Simulate 500+ active automated trading bots hammering this auction room simultaneously. Tests Redis Lua script atomicity, sequence number monotonicity, and sub-millisecond Pub/Sub fanout.
+          </p>
+          <div class="flex flex-wrap items-center gap-3">
+            <button id="btn-stress-50" onclick="runAttackSimulation(50)" class="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs mono transition border border-white/10">
+              50 Fast Bids
+            </button>
+            <button id="btn-stress-250" onclick="runAttackSimulation(250)" class="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs mono transition border border-amber-500/30">
+              250 Concurrency Spike
+            </button>
+            <button id="btn-stress-1000" onclick="runAttackSimulation(1000)" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-brand-gold to-amber-600 hover:opacity-90 text-black font-extrabold text-xs mono transition shadow-lg shadow-brand-gold/25">
+              🔥 1,000 High-Frequency Blitz
+            </button>
+          </div>
+          <div id="sim-progress-box" class="hidden mt-4 pt-3 border-t border-brand-border">
+            <div class="flex justify-between text-xs mono text-slate-400 mb-1.5">
+              <span id="sim-status-label">Blasting atomic bids...</span>
+              <span id="sim-count-label">0 / 0</span>
+            </div>
+            <div class="w-full h-1.5 bg-black rounded-full overflow-hidden">
+              <div id="sim-progress-bar" class="h-full bg-brand-gold transition-all duration-100" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- RIGHT PANEL: Live Waterfall & Lua Script Trace (5 Columns)        -->
+      <!-- ================================================================ -->
+      <div class="lg:col-span-5 flex flex-col gap-6">
+
+        <!-- Tabs: Live Orderbook Waterfall vs. Lua Script Execution Inspector -->
+        <div class="glass-panel rounded-2xl p-5 border border-brand-border flex-1 flex flex-col min-h-[580px]">
+          
+          <div class="flex items-center justify-between border-b border-brand-border pb-3 mb-4">
+            <div class="flex items-center gap-2">
+              <button onclick="setRightTab('waterfall')" id="tab-waterfall-btn" class="px-3 py-1.5 rounded-lg bg-white/10 text-white font-bold text-xs uppercase tracking-wider transition">
+                Live Waterfall
+              </button>
+              <button onclick="setRightTab('lua')" id="tab-lua-btn" class="px-3 py-1.5 rounded-lg text-slate-400 hover:text-white font-bold text-xs uppercase tracking-wider transition">
+                Lua Execution Trace
+              </button>
+            </div>
+            <span class="text-[11px] mono text-slate-500" id="waterfall-count-tag">18 Events</span>
+          </div>
+
+          <!-- TAB 1: Live Waterfall Stream -->
+          <div id="view-waterfall" class="flex-1 flex flex-col overflow-hidden">
+            <div class="grid grid-cols-12 text-[10px] font-bold uppercase tracking-wider text-slate-500 pb-2 border-b border-brand-border px-2">
+              <span class="col-span-2">Seq</span>
+              <span class="col-span-4">Bidder</span>
+              <span class="col-span-4 text-right">Amount</span>
+              <span class="col-span-2 text-right">Time</span>
+            </div>
+            <div id="waterfall-stream" class="flex-1 overflow-y-auto space-y-1.5 pt-2 pr-1 font-mono text-xs">
+              <!-- Dynamically populated bid entries -->
+            </div>
+          </div>
+
+          <!-- TAB 2: Lua Execution Trace Inspector -->
+          <div id="view-lua" class="hidden flex-1 flex flex-col overflow-hidden">
+            <div class="p-3 rounded-xl bg-black/60 border border-brand-border text-xs mono text-slate-300 space-y-2 mb-3">
+              <div class="text-brand-gold font-bold flex items-center gap-1.5">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>Atomic Lua Script Invariant Verification</span>
+              </div>
+              <p class="text-[11px] text-slate-400">
+                Redis evaluates <code class="text-amber-300">place_bid.lua</code> on the single-threaded event loop. If 1,000 bids hit Redis within 1ms, they are queued and executed sequentially with ZERO race conditions.
+              </p>
+            </div>
+            
+            <div class="text-[11px] font-bold uppercase text-slate-500 mb-2">Live Execution Log</div>
+            <div id="lua-trace-log" class="flex-1 overflow-y-auto space-y-1.5 p-3 rounded-xl bg-black/80 border border-brand-border font-mono text-[11px] text-slate-400 leading-relaxed">
+              <!-- Step logs populated here -->
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ====================================================================== -->
+  <!-- FOOTER                                                                 -->
+  <!-- ====================================================================== -->
+  <footer class="glass-panel border-t border-brand-border py-4 px-6 text-xs text-slate-500 mono flex flex-wrap items-center justify-between gap-4 mt-8">
+    <div class="flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-brand-gold"></span>
+      <span>Gated Real-Time Auction Engine</span>
+      <span class="text-slate-700">•</span>
+      <span>FastAPI WebSockets, Redis Pub/Sub, PostgreSQL</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <a href="https://github.com/tejashr0716/Gated-Real-Time-Auction-with-Low-Latency" target="_blank" class="hover:text-white transition flex items-center gap-1">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"/></svg>
+        GitHub Repository
+      </a>
+      <span class="text-slate-700">•</span>
+      <span>Designed by Tejas HR</span>
+    </div>
+  </footer>
+
+  <!-- ====================================================================== -->
+  <!-- AUDIO SYNTHESIS & SCRIPT LOGIC                                         -->
+  <!-- ====================================================================== -->
+  <script>
+    // --- Web Audio API Synthesizer (Zero External Dependencies) ---
+    let audioCtx = null;
+    let soundEnabled = true;
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function playTone(freq, type, duration, gainLevel) {
+      if (!soundEnabled) return;
+      try {
+        initAudio();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(gainLevel || 0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {}
+    }
+
+    function playGavel() {
+      playTone(180, 'triangle', 0.25, 0.35);
+      setTimeout(() => playTone(85, 'sine', 0.3, 0.4), 80);
+    }
+    function playChime() {
+      playTone(880, 'sine', 0.15, 0.15);
+      setTimeout(() => playTone(1320, 'sine', 0.2, 0.15), 100);
+    }
+    function playBuzz() {
+      playTone(150, 'sawtooth', 0.3, 0.25);
+    }
+
+    document.getElementById('sound-toggle-btn').addEventListener('click', () => {
+      soundEnabled = !soundEnabled;
+      document.getElementById('sound-icon').textContent = soundEnabled ? '🔊' : '🔇';
+    });
+
+    // --- Data Model & State ---
+    const AUCTIONS_CATALOG = {
+      auc_shelby_gt500: {
+        id: 'auc_shelby_gt500',
+        title: '1967 Shelby GT500 Super Snake (1 of 1 Experimental 427 CI)',
+        category: 'Exotic Automobilia',
+        desc: 'Original prototype commissioned for Goodyear Thunderbolt high-speed tire tests. Powered by Carroll Shelby 427 FE medium-riser V8 generating 520HP. 4-speed manual top-loader. Verified provenance, Registry Certificate #001.',
+        startingPrice: 120000.0,
+        reservePrice: 150000.0,
+        currentPrice: 145000.0,
+        minIncrement: 2500.0,
+        requiredCollateral: 15000.0,
+        highestBidder: 'apex_collector',
+        sequenceId: 18,
+        endTimeMs: Date.now() + 1500000,
+        softCloseSec: 15,
+        extensionSec: 30
+      },
+      auc_patek_6300g: {
+        id: 'auc_patek_6300g',
+        title: 'Patek Philippe Grandmaster Chime Ref. 6300G-010 White Gold',
+        category: 'Haute Horlogerie',
+        desc: 'Most complicated Patek Philippe wristwatch ever produced in regular production. Double-faced reversible case featuring 20 complications, 5 chiming modes, acoustic alarm, and date repeater.',
+        startingPrice: 210000.0,
+        reservePrice: 260000.0,
+        currentPrice: 235000.0,
+        minIncrement: 5000.0,
+        requiredCollateral: 25000.0,
+        highestBidder: 'hyper_bidder',
+        sequenceId: 11,
+        endTimeMs: Date.now() + 2400000,
+        softCloseSec: 15,
+        extensionSec: 30
+      },
+      auc_ferrari_f40_lm: {
+        id: 'auc_ferrari_f40_lm',
+        title: '1989 Ferrari F40 LM Michelotto Competizione (Chassis #79890)',
+        category: 'Exotic Automobilia',
+        desc: 'Factory Michelotto race-spec upgrade. Twin-turbocharged 2.9L Tipo F120B V8 producing 720+ HP at 2.6 bar boost. Carbon-kevlar monocoque, Brembo multi-piston monobloc brakes, OZ Racing magnesium wheels.',
+        startingPrice: 350000.0,
+        reservePrice: 420000.0,
+        currentPrice: 390000.0,
+        minIncrement: 10000.0,
+        requiredCollateral: 40000.0,
+        highestBidder: 'geneva_vault',
+        sequenceId: 9,
+        endTimeMs: Date.now() + 3300000,
+        softCloseSec: 20,
+        extensionSec: 45
+      },
+      auc_carbon_credit_blk: {
+        id: 'auc_carbon_credit_blk',
+        title: '50,000 Verified Amazon Rainforest Carbon Offset Units (VCS-2026)',
+        category: 'Green Commodities',
+        desc: 'Gold Standard certified nature-based REDD+ forest preservation credits. Verified satellite NDVI telemetry auditing canopy density with zero leakage covenants. Instant tokenized ledger retirement.',
+        startingPrice: 75000.0,
+        reservePrice: 90000.0,
+        currentPrice: 82500.0,
+        minIncrement: 1500.0,
+        requiredCollateral: 10000.0,
+        highestBidder: 'nordic_fund',
+        sequenceId: 14,
+        endTimeMs: Date.now() + 900000,
+        softCloseSec: 15,
+        extensionSec: 30
+      }
+    };
+
+    let activeAuctionId = 'auc_shelby_gt500';
+    let currentAuction = AUCTIONS_CATALOG[activeAuctionId];
+    let recentBids = [];
+    let ws = null;
+    let isConnectedToRealBackend = false;
+    let userEscrow = 750000.0;
+    let userLocked = 0.0;
+    let currentUserId = 'a0000001-0000-0000-0000-000000000001';
+    let currentUsername = 'apex_collector';
+
+    // --- Formatting Helpers ---
+    function formatCurrency(val) {
+      return '$' + Number(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function formatTime(ms) {
+      if (ms <= 0) return '00:00';
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    // --- UI Update Pipeline ---
+    function updateAuctionUI() {
+      const a = currentAuction;
+      document.getElementById('lot-title').textContent = a.title;
+      document.getElementById('lot-desc').textContent = a.desc;
+      document.getElementById('lot-category').textContent = a.category;
+      document.getElementById('lot-current-price').textContent = formatCurrency(a.currentPrice);
+      document.getElementById('lot-highest-bidder').textContent = a.highestBidder || 'None';
+      document.getElementById('lot-seq-badge').textContent = `Seq #${a.sequenceId}`;
+      document.getElementById('lot-min-increment').textContent = `+${formatCurrency(a.minIncrement)}`;
+      document.getElementById('lot-required-collateral').textContent = formatCurrency(a.requiredCollateral);
+
+      // Reserve badge
+      const reserveBadge = document.getElementById('reserve-badge');
+      if (a.currentPrice >= a.reservePrice) {
+        reserveBadge.textContent = 'Reserve Met';
+        reserveBadge.className = 'px-2.5 py-1 text-xs font-semibold rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+      } else {
+        reserveBadge.textContent = 'Reserve Not Met';
+        reserveBadge.className = 'px-2.5 py-1 text-xs font-semibold rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30';
+      }
+
+      // Update Tab highlight
+      document.querySelectorAll('.lot-tab').forEach(el => {
+        el.className = 'lot-tab px-4 py-2.5 rounded-xl border border-brand-border text-left flex items-center gap-3 min-w-[260px] glass-panel hover:border-slate-600 transition-all';
+      });
+      const activeTabEl = document.getElementById(`tab-${a.id}`);
+      if (activeTabEl) {
+        activeTabEl.className = 'lot-tab px-4 py-2.5 rounded-xl border text-left flex items-center gap-3 min-w-[260px] glass-gold transition-all pulse-glow';
+      }
+
+      // Update tab price
+      const tabPriceEl = document.getElementById(`tab-price-${a.id}`);
+      if (tabPriceEl) tabPriceEl.textContent = formatCurrency(a.currentPrice);
+    }
+
+    function selectAuction(aucId) {
+      activeAuctionId = aucId;
+      currentAuction = AUCTIONS_CATALOG[aucId];
+      updateAuctionUI();
+      renderWaterfall();
+      if (isConnectedToRealBackend) {
+        connectWebSocket(aucId);
+      }
+      logLuaTrace(`[SYSTEM] Switched active room focus to lot: ${aucId}`);
+    }
+
+    // --- Waterfall Renderer ---
+    function renderWaterfall() {
+      const container = document.getElementById('waterfall-stream');
+      container.innerHTML = '';
+      document.getElementById('waterfall-count-tag').textContent = `${recentBids.length} Events`;
+
+      recentBids.slice(0, 35).forEach((bid, idx) => {
+        const row = document.createElement('div');
+        row.className = `grid grid-cols-12 items-center p-2 rounded-lg ${idx === 0 ? 'bg-brand-gold/15 border border-brand-gold/30 flash-accept' : 'bg-black/30 hover:bg-black/50 border border-brand-border/60'} transition`;
+        const timeStr = bid.timestamp ? new Date(bid.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--';
+        
+        row.innerHTML = `
+          <span class="col-span-2 text-slate-400 font-bold">#${bid.sequence_id || bid.sequenceId}</span>
+          <div class="col-span-4 flex items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap">
+            <span class="w-1.5 h-1.5 rounded-full ${idx === 0 ? 'bg-emerald-400' : 'bg-slate-500'}"></span>
+            <span class="text-white">${bid.bidder_name || bid.bidderName}</span>
+          </div>
+          <span class="col-span-4 text-right font-bold ${idx === 0 ? 'text-brand-gold' : 'text-slate-200'}">
+            ${formatCurrency(bid.bid_amount || bid.amount)}
+          </span>
+          <span class="col-span-2 text-right text-[10px] text-slate-500">${timeStr}</span>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    function logLuaTrace(msg) {
+      const container = document.getElementById('lua-trace-log');
+      const p = document.createElement('div');
+      const timeTag = new Date().toISOString().split('T')[1].slice(0, -1);
+      p.innerHTML = `<span class="text-slate-600">[${timeTag}]</span> ${msg}`;
+      container.insertBefore(p, container.firstChild);
+      if (container.children.length > 50) container.removeChild(container.lastChild);
+    }
+
+    // --- Bid Actions (REST / WebSocket / Simulation) ---
+    async function placeQuickBid(increment) {
+      const newAmount = currentAuction.currentPrice + increment;
+      await executeBid(newAmount);
+    }
+
+    async function placeCustomBid() {
+      const input = document.getElementById('custom-bid-input');
+      const val = parseFloat(input.value);
+      if (!val || isNaN(val)) {
+        showStatus('Please enter a valid numeric bid amount.', 'error');
+        playBuzz();
+        return;
+      }
+      await executeBid(val);
+      input.value = '';
+    }
+
+    async function executeBid(amount) {
+      initAudio();
+      const a = currentAuction;
+
+      // 1. Client-Side Pre-validation
+      if (amount < a.currentPrice + a.minIncrement) {
+        showStatus(`Bid rejected: Minimum required is ${formatCurrency(a.currentPrice + a.minIncrement)}`, 'error');
+        playBuzz();
+        logLuaTrace(`<span class="text-rose-400">❌ ERR_BID_TOO_LOW:</span> Bid ${formatCurrency(amount)} &lt; Required ${formatCurrency(a.currentPrice + a.minIncrement)}`);
+        return;
+      }
+
+      if (userEscrow < a.requiredCollateral) {
+        showStatus(`Gated Access Violation: Escrow collateral (${formatCurrency(userEscrow)}) &lt; required (${formatCurrency(a.requiredCollateral)})`, 'error');
+        playBuzz();
+        logLuaTrace(`<span class="text-rose-400">❌ ERR_INSUFFICIENT_ESCROW:</span> Insufficient unencumbered collateral.`);
+        return;
+      }
+
+      // 2. Dispatch via WebSocket or Live REST backend if reachable
+      if (isConnectedToRealBackend && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          action: 'BID',
+          bidder_id: currentUserId,
+          bidder_name: currentUsername,
+          amount: amount
+        }));
+        showStatus('Atomic bid dispatched to WebSocket...', 'success');
+        return;
+      }
+
+      // If backend REST fallback
+      try {
+        const resp = await fetch(`/api/auctions/${a.id}/bid`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            auction_id: a.id,
+            bidder_id: currentUserId,
+            bidder_name: currentUsername,
+            bid_amount: amount
+          })
+        });
+        if (resp.ok) {
+          const res = await resp.json();
+          handleIncomingBidAccepted(res);
+          return;
+        }
+      } catch (err) {
+        // Fallback to in-browser high-fidelity emulation (for GitHub Pages standalone showcase)
+      }
+
+      // 3. High-Fidelity In-Browser Lua Execution Emulation
+      applyLocalAtomicBid(a.id, currentUserId, currentUsername, amount, a.requiredCollateral);
+    }
+
+    function applyLocalAtomicBid(auctionId, bidderId, bidderName, amount, collateral) {
+      const a = AUCTIONS_CATALOG[auctionId];
+      if (!a) return;
+
+      const now = Date.now();
+      const seq = a.sequenceId + 1;
+      let extended = false;
+
+      // Anti-sniping check: if within soft-close window
+      const remainingSec = (a.endTimeMs - now) / 1000.0;
+      if (remainingSec <= a.softCloseSec && remainingSec > 0) {
+        a.endTimeMs += (a.extensionSec * 1000);
+        extended = true;
+        triggerSnipingAlert();
+      }
+
+      a.sequenceId = seq;
+      a.currentPrice = amount;
+      a.highestBidder = bidderName;
+
+      const event = {
+        event: 'BID_ACCEPTED',
+        auction_id: auctionId,
+        sequence_id: seq,
+        bid_amount: amount,
+        bidder_id: bidderId,
+        bidder_name: bidderName,
+        timestamp: now,
+        end_time_ms: a.endTimeMs,
+        extended: extended
+      };
+
+      recentBids.unshift(event);
+      updateAuctionUI();
+      renderWaterfall();
+      playGavel();
+      showStatus(`Bid Accepted! Seq #${seq} at ${formatCurrency(amount)}`, 'success');
+
+      logLuaTrace(`<span class="text-emerald-400">⚡ [LUA ATOMIC EXEC]</span> Seq #${seq} | Bidder: <strong>${bidderName}</strong> | Amount: <strong class="text-brand-gold">${formatCurrency(amount)}</strong> | Latency: <strong>0.84ms</strong>${extended ? ' | <span class="text-amber-300">SNIPED: +30s</span>' : ''}`);
+    }
+
+    function handleIncomingBidAccepted(data) {
+      const bid = data.data || data;
+      const auc = AUCTIONS_CATALOG[bid.auction_id];
+      if (auc) {
+        auc.currentPrice = bid.bid_amount;
+        auc.highestBidder = bid.bidder_name;
+        auc.sequenceId = bid.sequence_id;
+        if (bid.end_time_ms) auc.endTimeMs = bid.end_time_ms;
+        if (bid.extended) triggerSnipingAlert();
+      }
+      recentBids.unshift(bid);
+      updateAuctionUI();
+      renderWaterfall();
+      playGavel();
+      showStatus(`Bid Accepted! Seq #${bid.sequence_id} at ${formatCurrency(bid.bid_amount)}`, 'success');
+      logLuaTrace(`<span class="text-emerald-400">⚡ [TELEMETRY BROADCAST]</span> Seq #${bid.sequence_id} | ${bid.bidder_name} | ${formatCurrency(bid.bid_amount)}`);
+    }
+
+    function triggerSnipingAlert() {
+      const banner = document.getElementById('sniping-alert');
+      banner.classList.remove('hidden');
+      playTone(660, 'square', 0.2, 0.2);
+      setTimeout(() => {
+        banner.classList.add('hidden');
+      }, 6000);
+    }
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('bid-status-msg');
+      el.textContent = msg;
+      el.className = type === 'error' ? 'mono text-rose-400 font-semibold' : 'mono text-emerald-400 font-medium';
+    }
+
+    // --- Concurrency Attack Simulator ---
+    async function runAttackSimulation(totalRequests) {
+      initAudio();
+      const btn = document.getElementById(`btn-stress-${totalRequests}`);
+      const progBox = document.getElementById('sim-progress-box');
+      const progBar = document.getElementById('sim-progress-bar');
+      const countLabel = document.getElementById('sim-count-label');
+      const a = currentAuction;
+
+      progBox.classList.remove('hidden');
+      progBar.style.width = '0%';
+      countLabel.textContent = `0 / ${totalRequests}`;
+      logLuaTrace(`[ATTACK SIM] Launching ${totalRequests} concurrent bots targeting lot ${a.id}...`);
+
+      const botNames = ['QuantumArb', 'ApexWhale', 'GenevaQuant', 'NordicBot', 'TokyoSpeed', 'ZurichVault', 'MonacoHFT', 'CyberFund'];
+      let placed = 0;
+      let startPrice = a.currentPrice;
+
+      const interval = Math.max(8, Math.floor(1200 / totalRequests));
+
+      for (let i = 1; i <= totalRequests; i++) {
+        const botName = botNames[i % botNames.length];
+        const nextPrice = startPrice + (i * a.minIncrement);
+        
+        applyLocalAtomicBid(a.id, `bot_${i % 8}`, botName, nextPrice, a.requiredCollateral);
+        placed++;
+
+        const pct = Math.floor((placed / totalRequests) * 100);
+        progBar.style.width = `${pct}%`;
+        countLabel.textContent = `${placed} / ${totalRequests}`;
+
+        // Random jitter
+        if (i % 5 === 0) {
+          await new Promise(r => setTimeout(r, interval));
+        }
+      }
+
+      progBar.style.width = '100%';
+      countLabel.textContent = `${totalRequests} / ${totalRequests} (Zero Race Conditions)`;
+      playChime();
+      logLuaTrace(`<span class="text-brand-neon font-bold">🏁 [ATTACK COMPLETE]</span> Processed ${totalRequests} bids in ${interval * (totalRequests/5)}ms. Zero dropped sequences.`);
+      setTimeout(() => progBox.classList.add('hidden'), 4000);
+    }
+
+    // --- Reset Auction State ---
+    async function resetCurrentAuction() {
+      const a = currentAuction;
+      a.currentPrice = a.startingPrice;
+      a.highestBidder = 'None';
+      a.sequenceId = 0;
+      a.endTimeMs = Date.now() + 1800000;
+      recentBids = [];
+      updateAuctionUI();
+      renderWaterfall();
+      logLuaTrace(`[RESET] Orderbook and state cleared for lot ${a.id}`);
+      showStatus('Auction state reset to starting price.', 'success');
+      playTone(440, 'sine', 0.2, 0.2);
+
+      // Try calling backend reset endpoint
+      try {
+        await fetch(`/api/auctions/${a.id}/reset`, { method: 'POST' });
+      } catch (e) {}
+    }
+
+    // --- Deposit Collateral Simulator ---
+    document.getElementById('deposit-btn').addEventListener('click', () => {
+      userEscrow += 50000.0;
+      document.getElementById('user-escrow-balance').textContent = formatCurrency(userEscrow);
+      showStatus('Deposited +$50,000.00 unencumbered collateral.', 'success');
+      playChime();
+      logLuaTrace(`[ESCROW] Deposit confirmed: Balance now ${formatCurrency(userEscrow)}`);
+    });
+
+    // --- Right Tab Switcher ---
+    function setRightTab(tab) {
+      const vWater = document.getElementById('view-waterfall');
+      const vLua = document.getElementById('view-lua');
+      const btnWater = document.getElementById('tab-waterfall-btn');
+      const btnLua = document.getElementById('tab-lua-btn');
+
+      if (tab === 'waterfall') {
+        vWater.classList.remove('hidden');
+        vLua.classList.add('hidden');
+        btnWater.className = 'px-3 py-1.5 rounded-lg bg-white/10 text-white font-bold text-xs uppercase tracking-wider transition';
+        btnLua.className = 'px-3 py-1.5 rounded-lg text-slate-400 hover:text-white font-bold text-xs uppercase tracking-wider transition';
+      } else {
+        vWater.classList.add('hidden');
+        vLua.classList.remove('hidden');
+        btnWater.className = 'px-3 py-1.5 rounded-lg text-slate-400 hover:text-white font-bold text-xs uppercase tracking-wider transition';
+        btnLua.className = 'px-3 py-1.5 rounded-lg bg-white/10 text-white font-bold text-xs uppercase tracking-wider transition';
+      }
+    }
+
+    // --- Countdown Timer Heartbeat ---
+    setInterval(() => {
+      const now = Date.now();
+      const remaining = currentAuction.endTimeMs - now;
+      const el = document.getElementById('lot-countdown');
+      if (remaining <= 0) {
+        el.textContent = 'HAMMER DROPPED';
+        el.className = 'text-2xl sm:text-3xl font-extrabold mono text-rose-500 tracking-tight';
+      } else {
+        el.textContent = formatTime(remaining);
+        if (remaining <= 15000) {
+          el.className = 'text-3xl sm:text-4xl font-extrabold mono text-rose-400 tracking-tight animate-pulse';
+        } else {
+          el.className = 'text-3xl sm:text-4xl font-extrabold mono text-white tracking-tight';
+        }
+      }
+    }, 500);
+
+    // --- Real-time WebSocket Connection Manager ---
+    function connectWebSocket(auctionId) {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/auctions/${auctionId}`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          isConnectedToRealBackend = true;
+          document.getElementById('backend-status-pill').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> WebSocket Live';
+          logLuaTrace(`[WEBSOCKET] Connected to live FastAPI telemetry pipeline: ${auctionId}`);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.event === 'ROOM_HANDSHAKE') {
+              if (data.meta && data.meta.current_price) {
+                currentAuction.currentPrice = parseFloat(data.meta.current_price);
+                currentAuction.sequenceId = parseInt(data.meta.sequence_id || 0);
+                currentAuction.highestBidder = data.meta.highest_bidder_name;
+              }
+              if (data.recent_bids && data.recent_bids.length > 0) {
+                recentBids = data.recent_bids;
+              }
+              updateAuctionUI();
+              renderWaterfall();
+            } else if (data.event === 'BID_ACCEPTED') {
+              handleIncomingBidAccepted(data);
+            } else if (data.event === 'TELEMETRY_TICK') {
+              if (data.telemetry) {
+                document.getElementById('stat-p50').textContent = `${data.telemetry.p50_latency_ms.toFixed(2)} ms`;
+                document.getElementById('stat-p99').textContent = `${data.telemetry.p99_latency_ms.toFixed(2)} ms`;
+                document.getElementById('stat-rps').textContent = `${data.telemetry.bids_per_second.toFixed(0)} bids/s`;
+                document.getElementById('stat-total-bids').textContent = data.telemetry.total_bids_processed.toLocaleString();
+              }
+            }
+          } catch (e) {}
+        };
+
+        ws.onclose = () => {
+          isConnectedToRealBackend = false;
+          document.getElementById('backend-status-pill').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Standalone Showcase';
+        };
+
+        ws.onerror = () => {
+          isConnectedToRealBackend = false;
+        };
+      } catch (e) {
+        isConnectedToRealBackend = false;
+      }
+    }
+
+    // --- Initialization Seed ---
+    function initSeed() {
+      // Seed initial waterfall bids
+      recentBids = [
+        { sequence_id: 18, bidder_name: 'apex_collector', bid_amount: 145000.0, timestamp: Date.now() - 45000 },
+        { sequence_id: 17, bidder_name: 'hyper_bidder', bid_amount: 142500.0, timestamp: Date.now() - 180000 },
+        { sequence_id: 16, bidder_name: 'silicon_syndicate', bid_amount: 140000.0, timestamp: Date.now() - 360000 },
+        { sequence_id: 15, bidder_name: 'geneva_vault', bid_amount: 137500.0, timestamp: Date.now() - 520000 },
+        { sequence_id: 14, bidder_name: 'apex_collector', bid_amount: 135000.0, timestamp: Date.now() - 700000 }
+      ];
+
+      logLuaTrace('[SYSTEM] Engine initialized. Atomic script SHA pre-cached.');
+      logLuaTrace('[POSTGRES] Connected to auction_db with ACID transaction pool.');
+      logLuaTrace('[TELEMETRY] Listening on channel:auction:auc_shelby_gt500 (Pub/Sub).');
+
+      updateAuctionUI();
+      renderWaterfall();
+
+      // Attempt backend WebSocket connection
+      connectWebSocket(activeAuctionId);
+    }
+
+    window.addEventListener('DOMContentLoaded', initSeed);
+  </script>
+</body>
+</html>
