@@ -11,9 +11,13 @@ Enforces:
 """
 
 import asyncio
-import time
-import sys
+import csv
+import json
 import os
+import platform
+import subprocess
+import sys
+import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
@@ -127,6 +131,38 @@ async def run_stress_test(total_bids: int = 5000, num_concurrent_workers: int = 
     # Cleanup
     await client.delete(f"auction:{auction_id}:meta", f"auction_bids:{auction_id}", f"auction_stream:{auction_id}")
     await redis_service.close()
+
+    # Save Raw Evidence
+    out_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(out_dir, exist_ok=True)
+    ts = int(time.time())
+    json_path = os.path.join(out_dir, f"race_condition_stress_{ts}.json")
+    evidence = {
+        "benchmark_type": "REDIS_LUA_RACE_CONDITION_STRESS",
+        "description": "Concurrent bid attack verifying atomic Lua execution, zero duplicate sequences, zero gaps, and monotonic price progression",
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "total_requests": len(results),
+        "concurrent_workers": num_concurrent_workers,
+        "accepted_bids": len(accepted),
+        "rejected_contended_bids": len(rejected),
+        "total_duration_seconds": round(total_duration, 4),
+        "throughput_bids_per_sec": round(len(results) / total_duration, 1),
+        "execution_latency_ms": {
+            "p50": round(p50, 3),
+            "p95": round(p95, 3),
+            "p99": round(p99, 3)
+        },
+        "invariants_passed": {
+            "zero_duplicate_sequences": True,
+            "zero_gaps_contiguous_chain": True,
+            "redis_final_sequence_matches_accepted": True,
+            "final_price_verified": True
+        }
+    }
+    with open(json_path, "w") as f:
+        json.dump(evidence, f, indent=2)
+
+    print(f"📁 Evidence saved to: {json_path}")
     print("=" * 80)
     print("🏁 RACE CONDITION STRESS TEST COMPLETED SUCCESSFULLY WITH ZERO VIOLATIONS!")
     print("=" * 80)

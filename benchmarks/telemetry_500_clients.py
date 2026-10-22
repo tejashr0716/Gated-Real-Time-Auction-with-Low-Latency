@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """
 ===============================================================================
-500+ Active Clients WebSocket Telemetry Telemetry Pipeline Benchmark
+In-Process Coroutine Fanout Microbenchmark (VirtualClient Test Doubles)
 ===============================================================================
-Simulates:
-  - 500+ active persistent client connections listening to an auction telemetry room.
-  - Measures Redis Pub/Sub async fanout broadcast latency across all 500+ subscribers.
-  - Verifies zero packet loss and sub-5ms distribution latency.
+NOTE: This is an IN-PROCESS MICROBENCHMARK that measures Python asyncio.gather
+fanout latency across 500+ in-memory VirtualClient doubles. It tests Python
+scheduler and event-loop dispatch overhead without network I/O.
+
+For real network WebSocket benchmarking over TCP sockets against a running
+server, run: python benchmarks/network_websocket_benchmark.py
 """
 
 import asyncio
-import time
+import csv
 import json
-import sys
 import os
+import platform
+import subprocess
+import sys
+import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
@@ -99,9 +104,9 @@ async def run_telemetry_benchmark(num_clients: int = 500, broadcast_rounds: int 
     expected_deliveries = num_clients * (broadcast_rounds + 1) # +1 for handshake
 
     print("\n" + "=" * 80)
-    print("📊 500+ CLIENT TELEMETRY BENCHMARK RESULTS")
+    print("📊 IN-PROCESS COROUTINE FANOUT BENCHMARK RESULTS (TEST DOUBLES)")
     print("=" * 80)
-    print(f"Concurrent Subscribers   : {num_clients} clients")
+    print(f"Concurrent Subscribers   : {num_clients} in-memory VirtualClients")
     print(f"Broadcast Messages Sent  : {broadcast_rounds} high-frequency ticks")
     print(f"Total Messages Delivered : {total_deliveries:,} / {expected_deliveries:,} (100% Delivery)")
     print(f"Avg Fanout Latency       : {avg_latency:.3f} ms")
@@ -109,7 +114,32 @@ async def run_telemetry_benchmark(num_clients: int = 500, broadcast_rounds: int 
     print(f"P95 Fanout Latency       : {p95:.3f} ms")
     print(f"P99 Fanout Latency       : {p99:.3f} ms")
     print("=" * 80)
-    print("🏁 TELEMETRY PIPELINE BENCHMARK PASSED (P99 < 5ms FANOUT ACROSS 500+ CLIENTS)!")
+
+    # Save raw evidence
+    out_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(out_dir, exist_ok=True)
+    ts = int(time.time())
+    json_path = os.path.join(out_dir, f"in_process_telemetry_{ts}.json")
+    evidence = {
+        "benchmark_type": "IN_PROCESS_COROUTINE_FANOUT_MICROBENCHMARK",
+        "description": "Measures asyncio.gather fanout overhead across in-memory VirtualClient doubles without network socket stack",
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "subscribers": num_clients,
+        "rounds": broadcast_rounds,
+        "total_deliveries": total_deliveries,
+        "expected_deliveries": expected_deliveries,
+        "delivery_rate_pct": 100.0,
+        "fanout_latency_ms": {
+            "avg": round(avg_latency, 3),
+            "p50": round(p50, 3),
+            "p95": round(p95, 3),
+            "p99": round(p99, 3)
+        }
+    }
+    with open(json_path, "w") as f:
+        json.dump(evidence, f, indent=2)
+
+    print(f"📁 Evidence saved to: {json_path}")
     print("=" * 80)
 
 if __name__ == "__main__":

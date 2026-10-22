@@ -1,0 +1,42 @@
+{
+  "benchmark_type": "REAL_NETWORK_WEBSOCKET_BENCHMARK",
+  "description": "Measures real TCP WebSocket handshake, point-to-point acknowledgment, and Redis Pub/Sub broadcast fanout across concurrent network clients",
+  "timestamp_utc": "2026-10-22T15:51:40.443877+00:00",
+  "git_commit_sha": "53dbdd8fe79e7b1f02ed9e5bd9c85b3b59935c06",
+  "platform": {
+    "system": "Darwin",
+    "release": "27.0.0",
+    "machine": "arm64",
+    "python_version": "3.14.6"
+  },
+  "target_url": "ws://127.0.0.1:8000/ws/auctions/auc_shelby_gt500",
+  "concurrent_clients_connected": 50,
+  "failed_connections": 0,
+  "connection_handshake_latency_ms": {
+    "p50": 94.94,
+    "p95": 101.973,
+    "p99": 109.775,
+    "min": 90.13,
+    "max": 109.775
+  },
+  "point_to_point_ack_latency_ms": {
+    "p50": 1.126,
+    "p95": 8.593,
+    "p99": 9.886,
+    "min": 0.627,
+    "max": 10.529,
+    "total_samples": 500,
+    "errors": 0
+  },
+  "broadcast_fanout_latency_ms": {
+    "p50": 2.417,
+    "p95": 5.788,
+    "p99": 6.188,
+    "min": 0.773,
+    "max": 6.336,
+    "broadcast_ticks": 15,
+    "active_listeners": 49,
+    "total_broadcast_messages_delivered": 735,
+    "delivery_rate_pct": 100.0
+  }
+}

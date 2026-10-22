@@ -1,0 +1,16 @@
+{
+  "benchmark_type": "IN_PROCESS_COROUTINE_FANOUT_MICROBENCHMARK",
+  "description": "Measures asyncio.gather fanout overhead across in-memory VirtualClient doubles without network socket stack",
+  "timestamp_utc": "2026-10-22T15:52:11Z",
+  "subscribers": 500,
+  "rounds": 25,
+  "total_deliveries": 13000,
+  "expected_deliveries": 13000,
+  "delivery_rate_pct": 100.0,
+  "fanout_latency_ms": {
+    "avg": 3.405,
+    "p50": 2.739,
+    "p95": 6.111,
+    "p99": 6.955
+  }
+}

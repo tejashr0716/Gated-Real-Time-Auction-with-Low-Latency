@@ -1,0 +1,22 @@
+{
+  "benchmark_type": "REDIS_LUA_RACE_CONDITION_STRESS",
+  "description": "Concurrent bid attack verifying atomic Lua execution, zero duplicate sequences, zero gaps, and monotonic price progression",
+  "timestamp_utc": "2026-10-22T15:51:47Z",
+  "total_requests": 3000,
+  "concurrent_workers": 50,
+  "accepted_bids": 2602,
+  "rejected_contended_bids": 398,
+  "total_duration_seconds": 0.3856,
+  "throughput_bids_per_sec": 7779.3,
+  "execution_latency_ms": {
+    "p50": 4.894,
+    "p95": 7.135,
+    "p99": 35.661
+  },
+  "invariants_passed": {
+    "zero_duplicate_sequences": true,
+    "zero_gaps_contiguous_chain": true,
+    "redis_final_sequence_matches_accepted": true,
+    "final_price_verified": true
+  }
+}

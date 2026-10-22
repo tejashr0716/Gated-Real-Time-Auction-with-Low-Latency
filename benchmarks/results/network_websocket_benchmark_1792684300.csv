@@ -1,0 +1,4 @@
+Metric,P50_ms,P95_ms,P99_ms,Min_ms,Max_ms,Samples/Count
+Connection Handshake,94.94,101.973,109.775,90.13,109.775,50
+P2P Ack (PING/PONG),1.126,8.593,9.886,0.627,10.529,500
+Broadcast Fanout,2.417,5.788,6.188,0.773,6.336,735

@@ -1,24 +1,20 @@
 # ⚡ Gated Real-Time Auction Engine
 
-[![Live Interactive Showcase](https://img.shields.io/badge/Live_Showcase-GitHub_Pages-E5A93C?style=for-the-badge&logo=github&logoColor=black)](https://tejashr0716.github.io/auction/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
-[![Redis](https://img.shields.io/badge/Redis_7.2-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL_15-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![WebSockets](https://img.shields.io/badge/WebSockets-010101?style=for-the-badge&logo=socketdotio&logoColor=white)](https://websockets.readthedocs.io/)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Tests Passing](https://img.shields.io/badge/Pytest-15%2F15_Passed-10B981?style=for-the-badge&logo=pytest&logoColor=white)](backend/tests/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Redis](https://img.shields.io/badge/Redis_7.2-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL_15-316192?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![WebSockets](https://img.shields.io/badge/WebSockets-010101?style=flat-square&logo=socketdotio&logoColor=white)](https://websockets.readthedocs.io/)
+[![Pytest Suite](https://img.shields.io/badge/Pytest-15%2F15_Passed-10B981?style=flat-square&logo=pytest&logoColor=white)](backend/tests/)
+[![Live Interactive Showcase](https://img.shields.io/badge/Live_Showcase-GitHub_Pages-E5A93C?style=flat-square&logo=github&logoColor=black)](https://tejashr0716.github.io/auction/)
 
-> **High-frequency, low-latency event-driven telemetry and orderbook engine built for gated real-time auctions.**  
-> Engineered with **FastAPI WebSockets**, **Redis Pub/Sub**, and **PostgreSQL**, enforcing absolute state consistency and zero-tolerance race-condition prevention across 50,000+ processed bids through custom atomic **Redis Lua scripts**.
+> **High-frequency, low-latency event-driven telemetry and orderbook engine for gated real-time auctions.**  
+> Engineered with **FastAPI WebSockets**, **Redis Pub/Sub**, and **PostgreSQL**, enforcing strict orderbook invariants (zero duplicate sequence IDs, zero sequence gaps, monotonic price progression) under concurrent load through custom atomic **Redis Lua scripts** and asynchronous write-behind streams.
 
 ---
 
-## 🌐 Live Interactive Showcase
-
-Experience the full real-time auction engine running live in your browser:  
-👉 **[https://tejashr0716.github.io/auction/](https://tejashr0716.github.io/auction/)**
-
-*(Features live orderbook watermarks, sub-millisecond execution logs, real-time audio synthesis, dynamic anti-sniping soft-close extensions, escrow collateral verification, and a built-in **1,000-bid high-concurrency attack simulator**.)*
+> [!NOTE]
+> **METHODOLOGY & BENCHMARK TRANSPARENCY**  
+> All performance metrics documented below distinguish between **in-process coroutine microbenchmarks** (using `VirtualClient` doubles to isolate Python event loop dispatch), **real network TCP WebSocket benchmarks** (measuring socket serialization, OS TCP buffers, and network round-trip), and **Redis Lua atomic execution**. Raw timestamped benchmark outputs are checked into [`benchmarks/results/`](benchmarks/results/).
 
 ---
 
@@ -26,22 +22,22 @@ Experience the full real-time auction engine running live in your browser:
 
 ```mermaid
 flowchart TD
-    subgraph ClientLayer["🖥️ Active Client & High-Frequency Ingress Layer"]
-        Bidders["500+ Active WebSocket Clients (Bidders & Viewers)"]
-        AttackSim["Concurrency Stress Simulator (1,000+ Bids/Burst)"]
+    subgraph ClientLayer["🖥️ Ingress & Telemetry Layer"]
+        NetworkClients["Real Network WebSocket Clients (Bidders / Listeners)"]
+        RESTClients["HTTP REST Clients (Gate Pass / Fallback Ingress)"]
     end
 
     subgraph GatewayLayer["⚡ FastAPI ASGI Application Gateway (Port 8000)"]
-        WSManager["WebSocket Connection Manager<br/>(Fanout Broadcaster & Heartbeat Worker)"]
-        BidsRoute["POST /api/auctions/{id}/bid<br/>(REST Fallback Route)"]
+        WSManager["WebSocket Connection Manager<br/>(Fanout Broadcaster & Redis Pub/Sub Subscriber)"]
+        BidsRoute["POST /api/auctions/{id}/bid<br/>(REST Route)"]
         AuthRoute["POST /api/auth/gate-pass<br/>(HMAC Collateral Verification)"]
     end
 
     subgraph MemoryLayer["🔴 In-Memory Atomic Execution Core (Redis 7.2)"]
-        LuaScript["custom place_bid.lua<br/>(Single-Threaded Atomic Validation Core)"]
+        LuaScript["custom place_bid.lua<br/>(Single-Threaded Atomic Validation)"]
         MetaHash["Hash: auction:{id}:meta<br/>(Price, Seq ID, Leader, Expiry)"]
         EscrowHash["Hash: escrow:{bidder_id}<br/>(Total & Locked Collateral)"]
-        PubSubChannel["Channel: channel:auction:{id}<br/>(Sub-Millisecond Event Broadcast)"]
+        PubSubChannel["Channel: channel:auction:{id}<br/>(Pub/Sub Event Broadcast)"]
         EventStream["Stream: auction_stream:{id}<br/>(Durable Write-Behind Buffer)"]
     end
 
@@ -56,18 +52,18 @@ flowchart TD
     end
 
     %% Flow Connections
-    Bidders <-->|Bidirectional WS Stream & Pings| WSManager
-    AttackSim -->|Concurrent Bursts| BidsRoute
+    NetworkClients <-->|Bidirectional WS Stream & Pings| WSManager
+    RESTClients --> BidsRoute
     BidsRoute -->|EVALSHA| LuaScript
     WSManager -->|EVALSHA on WS Bids| LuaScript
 
-    LuaScript <-->|Atomic Mutex & State Checks| MetaHash
-    LuaScript <-->|Verify & Hold Collateral| EscrowHash
+    LuaScript <-->|Atomic State Checks| MetaHash
+    LuaScript <-->|Verify & Lock Collateral| EscrowHash
     LuaScript -->|PUBLISH Event| PubSubChannel
     LuaScript -->|XADD Accepted Bid| EventStream
 
-    PubSubChannel -->|Zero-Latency Fanout| WSManager
-    WSManager -->|Broadcast Payload <3ms| Bidders
+    PubSubChannel -->|Redis Pub/Sub Fanout| WSManager
+    WSManager -->|Broadcast Payload| NetworkClients
 
     EventStream -->|Batch Read| SyncWorker
     SyncWorker -->|ACID Idempotent Upsert| PGBids
@@ -77,24 +73,27 @@ flowchart TD
 
 ---
 
-## 🎯 Key Engineering Guarantees
+## 🎯 Key Engineering Invariants & Verified Guarantees
 
-| Challenge | Architectural Implementation | Measurable Outcome |
+| Invariant / Mechanism | Architectural Implementation | Measured & Verified Outcome |
 | :--- | :--- | :--- |
-| **Race Conditions / Contention Spikes** | Single-threaded atomic evaluation via custom **Redis Lua scripts** (`place_bid.lua`) | **Zero race conditions** across 50,000+ bids. Monotonic sequence increment without duplicate or skipped numbers. |
-| **Telemetry Broadcast Fanout** | Asynchronous **Redis Pub/Sub** feeding an asynchronous non-blocking fan-out WebSocket pipeline | **P99 broadcast latency < 3.2ms** across **500+ active persistent clients**. |
-| **Last-Second Bid Sniping** | Dynamic **Anti-Sniping Soft-Close Window**: bids placed under 15s auto-extend the auction clock by +30s | Keeps all 500+ participants synchronized; eliminates automated snipe bots from stealing lots at the final millisecond. |
-| **Gated Access & Solvency Control** | Unencumbered **Escrow Collateral Locks** held in Redis memory and reconciled to PostgreSQL | Prevents uncollateralized or bad-faith bidding; collateral from superseded bidders is instantly unlocked and reassigned. |
-| **Durability Without Latency Penalty** | Asynchronous **Write-Behind Stream Worker** (`auction_stream:*` → PostgreSQL `bids` table) | HTTP/WebSocket fast-path completes in **< 1.5ms**, while background worker guarantees exact-once ACID durability. |
-| **Monotonic Sequence Auditability** | Database unique constraint `CONSTRAINT uq_auction_sequence UNIQUE (auction_id, sequence_id)` | Mathematically guarantees gapless audit trail from sequence `#1` to `#N`. |
+| **Race Condition Immunity** | Single-threaded atomic evaluation via custom **Redis Lua script** (`place_bid.lua`) | **Zero race conditions** under 3,000 concurrent bids across 50 async workers (`7,779.3 bids/sec`). 100% contiguous sequence chain ($1..N$) with zero duplicates and zero gaps. |
+| **Real Network WebSocket Acknowledgment** | Direct WebSocket handler in `websocket.py` replying to client PING or BID receipts | **P50 Ack Latency: 1.13 ms** (P99: 9.89 ms) measured across 50 concurrent network TCP WebSocket connections. |
+| **Network Broadcast Fanout** | Redis Pub/Sub listener triggering non-blocking `asyncio.gather` TCP socket sends | **P50 Fanout Latency: 2.42 ms** (P99: 6.19 ms) across 50 concurrent network sockets over TCP loopback (100% frame delivery, 0% packet loss). |
+| **Anti-Sniping Soft-Close Extension** | Lua script auto-extends auction deadline by `+30s` if bid is placed within final `15s` window | Neutralizes last-millisecond automated sniping advantages by reopening bidding to all participants. |
+| **Economic Gating & Collateral Escrow** | Atomic escrow balance validation and collateral lock held in Redis memory | Rejects bids where unencumbered balance is below required collateral. Superseded bidders have collateral automatically freed. |
+| **Durability Without Latency Penalty** | Asynchronous Write-Behind Stream Worker (`auction_stream:*` $\to$ PostgreSQL `bids`) | Hot execution path completes in memory; worker persists records with idempotent deduplication (`UNIQUE(auction_id, sequence_id)`). |
+
+> [!NOTE]
+> **Bot Protection Scope:** Bot mitigation in this project consists of **economic gating** (verifying deposited escrow collateral before granting an HMAC gate pass) and **anti-sniping soft-close timer extension** in Lua. It does *not* include ML-based bot classification or CAPTCHA challenges.
 
 ---
 
 ## 🔬 Inside the Atomic Lua Script (`place_bid.lua`)
 
-Standard multi-threaded or multi-instance web servers fail under bid flash events because concurrent read-modify-write patterns (`SELECT price` → `IF bid > price` → `UPDATE price`) allow duplicate winning bids and race conditions. 
+Standard multi-threaded or multi-instance web servers fail under bid flash events because concurrent read-modify-write patterns (`SELECT price` $\to$ `IF bid > price` $\to$ `UPDATE price`) allow duplicate winning bids. 
 
-By executing bid logic inside a Redis Lua script using `EVALSHA`, the entire sequence executes as a **single atomic transaction**:
+By executing bid logic inside a Redis Lua script using `EVALSHA`, the entire validation sequence executes as a single atomic transaction:
 
 ```lua
 -- 1. Check Auction Exists & Status == ACTIVE
@@ -135,45 +134,95 @@ redis.call("XADD", "auction_stream:" .. auction_id, "*", ...)
 
 ---
 
-## 📊 Benchmark & Concurrency Verification
+## 📊 Reproducible Benchmark Evidence
 
-### 1. 2,000 Concurrent Bids Stress Test (`race_condition_stress.py`)
-Executed across 50 concurrent async workers hammering the engine simultaneously:
-```
-================================================================================
-📊 STRESS TEST RESULTS & VERIFICATION AUDIT
-================================================================================
-Total Requests Processed : 2,000
-Accepted Winning Bids    : 1,683
-Rejected / Contended Bids: 317
-Total Elapsed Time       : 0.269 seconds
-Throughput Rate          : 7,439.1 bids/second
-P50 Execution Latency    : 4.935 ms
-P95 Execution Latency    : 6.093 ms
-P99 Execution Latency    : 40.536 ms
-✅ Invariant 1 Passed: ZERO duplicate sequence IDs. All numbers strictly unique.
-✅ Invariant 2 Passed: 100% contiguous sequence chain from 1 to 1683 with ZERO gaps.
-✅ Invariant 3 Passed: Final Redis orderbook sequence matches accepted count (1683).
-✅ Invariant 4 Passed: Final price verified at $150,000.00.
-================================================================================
+All benchmarks were run against a live local instance (Apple Silicon arm64, Python 3.14, Redis 7.2, PostgreSQL 15). Raw outputs are preserved in [`benchmarks/results/`](benchmarks/results/).
+
+### 1. Real Network TCP WebSocket Benchmark
+- **Script:** `python benchmarks/network_websocket_benchmark.py 50 10 15`
+- **Methodology:** Launches 50 concurrent network WebSocket connections over TCP loopback to `ws://127.0.0.1:8000/ws/auctions/auc_shelby_gt500`.
+- **Connections:** 50 / 50 connected (0 failures)
+- **Handshake Latency:** P50 = 94.94 ms, P99 = 109.78 ms
+- **Point-to-Point Ack Latency (PING/PONG):** P50 = **1.13 ms**, P95 = 5.21 ms, P99 = **9.89 ms** ($N=500$ samples)
+- **Broadcast Fanout Latency:** P50 = **2.42 ms**, P95 = 4.88 ms, P99 = **6.19 ms** ($N=735$ deliveries)
+- **Frame Delivery Completeness:** 735 / 735 frames (**100.0% delivery, 0% packet loss**)
+- **Evidence Files:**
+  - JSON: [`benchmarks/results/network_websocket_benchmark_1792684300.json`](benchmarks/results/network_websocket_benchmark_1792684300.json)
+  - CSV: [`benchmarks/results/network_websocket_benchmark_1792684300.csv`](benchmarks/results/network_websocket_benchmark_1792684300.csv)
+
+### 2. High-Concurrency Race Condition Stress Test
+- **Script:** `python benchmarks/race_condition_stress.py 3000 50`
+- **Methodology:** Dispatches 3,000 bids simultaneously across 50 concurrent async workers contending for the orderbook.
+- **Total Requests Processed:** 3,000 bids
+- **Accepted Winning Bids:** 2,602
+- **Contended / Rejected Bids:** 398 (rejected cleanly with proper error codes)
+- **Elapsed Time:** 0.386 seconds
+- **Throughput:** **7,779.3 bids/second**
+- **Execution Latency:** P50 = **4.89 ms**, P95 = **7.14 ms**, P99 = **35.66 ms**
+- **Mathematical Invariants Verified:**
+  1. `assert len(sequences) == len(set(sequences))` — **ZERO duplicate sequence IDs**.
+  2. `assert sorted(sequences) == list(range(1, 2603))` — **Contiguous sequence chain (1..2602) with ZERO gaps**.
+  3. `assert final_seq == 2602` — **Redis metadata sequence exactly equals accepted bid count**.
+  4. Final price verified mathematically against cumulative accepted increments.
+- **Evidence File:**
+  - JSON: [`benchmarks/results/race_condition_stress_1792684307.json`](benchmarks/results/race_condition_stress_1792684307.json)
+
+### 3. In-Process Coroutine Fanout Microbenchmark
+- **Script:** `python benchmarks/telemetry_500_clients.py 500 25`
+- **Methodology:** Connects 500 `VirtualClient` in-memory test doubles to measure Python `asyncio.gather` event-loop dispatch without OS socket limits.
+- **Subscribers:** 500 in-memory clients
+- **Broadcast Ticks:** 25 ticks
+- **Deliveries:** 13,000 / 13,000 (100% delivery)
+- **Fanout Latency:** P50 = **2.74 ms**, P95 = **6.11 ms**, P99 = **6.96 ms**
+- **Evidence File:**
+  - JSON: [`benchmarks/results/in_process_telemetry_1792684331.json`](benchmarks/results/in_process_telemetry_1792684331.json)
+
+---
+
+## 🚀 Reproduction Commands
+
+### 1. Prerequisites
+- **Python 3.11+**
+- **Redis 7.0+** running on `localhost:6379`
+- **PostgreSQL 14+** running on `localhost:5432` with database `auction_db`
+
+### 2. Setup & Installation
+```bash
+git clone https://github.com/tejashr0716/Gated-Real-Time-Auction-with-Low-Latency.git
+cd Gated-Real-Time-Auction-with-Low-Latency
+git checkout grounded-implementation
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
 ```
 
-### 2. 500+ Active Client Telemetry Fanout (`telemetry_500_clients.py`)
-Executed with 500 persistent WebSocket client connections listening to real-time orderbook ticks:
+### 3. Run Automated Pytest Suite
+```bash
+pytest -v
 ```
-================================================================================
-📊 500+ CLIENT TELEMETRY BENCHMARK RESULTS
-================================================================================
-Concurrent Subscribers   : 500 clients
-Broadcast Messages Sent  : 25 high-frequency ticks
-Total Messages Delivered : 13,000 / 13,000 (100% Delivery)
-Avg Fanout Latency       : 2.694 ms
-P50 Fanout Latency       : 2.667 ms
-P95 Fanout Latency       : 2.891 ms
-P99 Fanout Latency       : 3.182 ms
-================================================================================
-🏁 TELEMETRY PIPELINE BENCHMARK PASSED (P99 < 5ms FANOUT ACROSS 500+ CLIENTS)!
-================================================================================
+*Expected Output:* `15 passed in ~0.8s` (Gracefully skips individual tests if local Redis or Postgres is offline).
+
+### 4. Run Concurrency & Telemetry Benchmarks
+Ensure Redis is running (`redis-cli ping` returns `PONG`):
+
+```bash
+# 1. Race condition stress test (3,000 bids across 50 concurrent workers)
+python3 benchmarks/race_condition_stress.py 3000 50
+
+# 2. In-process coroutine microbenchmark (500 in-memory subscriber doubles)
+python3 benchmarks/telemetry_500_clients.py 500 25
+```
+
+### 5. Run Real Network WebSocket Benchmark
+Start the backend server in one terminal:
+```bash
+cd backend
+python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In a second terminal, execute the network benchmark:
+```bash
+python3 benchmarks/network_websocket_benchmark.py 50 10 15
 ```
 
 ---
@@ -187,7 +236,7 @@ Gated-Real-Time-Auction-with-Low-Latency/
 ├── pytest.ini                       # Asyncio test configuration
 ├── README.md                        # Master architectural documentation
 ├── backend/
-│   ├── Dockerfile                   # Production container definition
+│   ├── Dockerfile                   # Container definition
 │   ├── requirements.txt             # Production dependencies
 │   ├── worker.py                    # Standalone background consumer worker (Postgres sync)
 │   ├── app/
@@ -196,151 +245,18 @@ Gated-Real-Time-Auction-with-Low-Latency/
 │   │   ├── lua/
 │   │   │   ├── place_bid.lua        # Atomic bid validation, escrow check & broadcast
 │   │   │   └── reset_auction.lua    # Ephemeral state re-initialization
-│   │   ├── routers/
-│   │   │   ├── auth.py              # Gated access passes & JWT authentication
-│   │   │   ├── auctions.py          # Auction catalog with live Redis overlays
-│   │   │   ├── bids.py              # REST bid placement endpoint
-│   │   │   ├── escrow.py            # Collateral deposits & audit logs
-│   │   │   ├── telemetry.py         # Latency metrics & throughput snapshots
-│   │   │   └── websocket.py         # High-frequency WebSocket telemetry pipeline
-│   │   ├── schemas/                 # Pydantic v2 data models
-│   │   ├── services/
-│   │   │   ├── redis_client.py      # Async Redis connection pool (up to 2,000 conns)
-│   │   │   ├── database.py          # Asyncpg connection pool with transaction helpers
-│   │   │   ├── lua_engine.py        # Lua script compilation and latency instrumentation
-│   │   │   ├── websocket_manager.py # 500+ client fanout broadcaster
-│   │   │   └── telemetry_metrics.py # Percentile calculators (P50, P95, P99)
-│   │   └── templates/
-│   │       └── index.html           # Luxury terminal dashboard & simulated showcase
-│   └── tests/
-│       ├── conftest.py              # Pytest asyncio fixtures
-│       ├── test_lua_atomic_bids.py  # Tests for Lua script atomicity & anti-sniping
-│       ├── test_gated_escrow.py     # Tests for collateral locks and reallocations
-│       ├── test_websocket_telemetry.py # Tests for WebSocket manager and fanout
-│       ├── test_api_endpoints.py    # Tests for REST routes & gate clearances
-│       └── test_sync_worker.py      # Tests for write-behind PostgreSQL worker
+│   │   ├── routers/                 # REST and WebSocket endpoints
+│   │   ├── services/                # Redis, Database, WebSocketManager, LuaEngine
+│   │   └── templates/index.html     # Luxury terminal dashboard
+│   └── tests/                       # 15 automated pytest cases
 └── benchmarks/
-    ├── race_condition_stress.py     # Concurrency stress tester (50,000+ processed bids)
-    └── telemetry_500_clients.py     # 500+ client WebSocket fanout latency benchmark
+    ├── network_websocket_benchmark.py # Real network TCP WebSocket benchmark
+    ├── race_condition_stress.py       # Atomic Redis Lua concurrency stress test
+    ├── telemetry_500_clients.py       # In-process coroutine fanout microbenchmark
+    └── results/                       # Version-controlled raw benchmark JSON/CSV outputs
 ```
-
----
-
-## 🚀 Getting Started
-
-### 1. Prerequisites
-- **Python 3.11+**
-- **Redis 7.0+**
-- **PostgreSQL 14+**
-- *(Optional)* **Docker & Docker Compose**
-
-### 2. Quickstart with Docker Compose
-To boot the complete distributed stack (PostgreSQL, Redis, FastAPI Gateway, and the Background Write-Behind Sync Worker) with a single command:
-```bash
-docker compose up -d
-```
-Visit **`http://localhost:8000/`** to view the live dashboard.
-
----
-
-### 3. Manual Local Setup
-
-#### Step 1: Initialize Database
-```bash
-# Create database and apply schema with luxury seed data
-psql -U postgres -c "CREATE DATABASE auction_db;"
-psql -U postgres -d auction_db -f schema.sql
-```
-
-#### Step 2: Install Dependencies
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-#### Step 3: Run FastAPI Application
-```bash
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-#### Step 4: Run Background Sync Worker
-In a second terminal:
-```bash
-cd backend
-python3 worker.py
-```
-
-Open **`http://localhost:8000/`** in your browser.
-
----
-
-## 🧪 Running Automated Tests
-
-Run the full automated test suite covering Lua atomicity, WebSocket fanout, gated escrow checks, and worker sync:
-
-```bash
-python3 -m pytest backend/tests/ -v
-```
-
-Output:
-```
-backend/tests/test_api_endpoints.py::test_health_check_endpoint PASSED   [  6%]
-backend/tests/test_api_endpoints.py::test_list_auctions_endpoint PASSED  [ 13%]
-backend/tests/test_api_endpoints.py::test_get_single_auction PASSED      [ 20%]
-backend/tests/test_api_endpoints.py::test_gate_pass_clearance PASSED     [ 26%]
-backend/tests/test_api_endpoints.py::test_escrow_balance_and_deposit PASSED [ 33%]
-backend/tests/test_api_endpoints.py::test_telemetry_metrics_endpoint PASSED [ 40%]
-backend/tests/test_gated_escrow.py::test_gated_escrow_insufficient_funds PASSED [ 46%]
-backend/tests/test_gated_escrow.py::test_gated_escrow_lock_and_release PASSED [ 53%]
-backend/tests/test_lua_atomic_bids.py::test_atomic_bid_placement_success PASSED [ 60%]
-backend/tests/test_lua_atomic_bids.py::test_bid_rejection_too_low PASSED [ 66%]
-backend/tests/test_lua_atomic_bids.py::test_self_outbid_prevention PASSED [ 73%]
-backend/tests/test_lua_atomic_bids.py::test_anti_sniping_soft_close_extension PASSED [ 80%]
-backend/tests/test_lua_atomic_bids.py::test_high_concurrency_race_condition_immunity PASSED [ 86%]
-backend/tests/test_sync_worker.py::test_worker_persists_stream_to_postgres PASSED [ 93%]
-backend/tests/test_websocket_telemetry.py::test_websocket_manager_connect_and_broadcast PASSED [100%]
-
-============================== 15 passed in 0.69s ==============================
-```
-
----
-
-## ⚡ Running Concurrency Benchmarks
-
-### 1. High-Concurrency Race Condition Stress Test
-```bash
-# Simulates 2,000 bids across 50 concurrent workers
-python3 benchmarks/race_condition_stress.py 2000 50
-```
-
-### 2. 500+ Client WebSocket Fanout Benchmark
-```bash
-# Connects 500 virtual WebSocket clients and measures fanout latency
-python3 benchmarks/telemetry_500_clients.py 500 25
-```
-
----
-
-## 📡 API & WebSocket Reference
-
-### 1. WebSocket Telemetry Pipeline
-- **`WS /ws/auctions/{auction_id}`**: Real-time bi-directional telemetry connection.
-  - On Connect: Receives `ROOM_HANDSHAKE` containing recent 25 bids, active client count, and live countdown state.
-  - Stream Events: Receives `BID_ACCEPTED`, `AUCTION_EXTENDED`, `AUCTION_HAMMER`, and `TELEMETRY_TICK`.
-  - Ingress: Client can send `{"action": "BID", "bidder_id": "...", "amount": 150000.0}` for minimal round-trip latency.
-
-### 2. Gated Access & Bids REST API
-- **`POST /api/auth/gate-pass`**: Request cryptographic gate clearance pass verifying required collateral.
-- **`POST /api/auctions/{auction_id}/bid`**: REST fallback for placing bids atomically via Lua script (`200 OK` / `409 Conflict` / `403 Forbidden`).
-- **`GET /api/auctions`**: Catalog with real-time Redis price and leader overlays.
-- **`POST /api/auctions/{auction_id}/reset`**: Reset auction to starting price for testing/demonstration.
-- **`GET /api/escrow/balance`**: Inspect total and unencumbered escrow collateral balance.
-- **`POST /api/escrow/deposit`**: Deposit collateral funds with idempotent transaction audit logging.
-- **`GET /api/telemetry/metrics`**: Live P50, P95, P99 latency percentiles and throughput rates.
 
 ---
 
 ## 📄 License
-MIT License. Engineered by [Tejas HR](https://github.com/tejashr0716).
+MIT License. Developed by [Tejas HR](https://github.com/tejashr0716).
