@@ -94,11 +94,12 @@ async def run_stress_test(total_bids: int = 5000, num_concurrent_workers: int = 
     print("\n" + "=" * 80)
     print("📊 STRESS TEST RESULTS & VERIFICATION AUDIT")
     print("=" * 80)
-    print(f"Total Requests Processed : {len(results):,}")
+    print(f"Total Attempts Processed : {len(results):,}")
     print(f"Accepted Winning Bids    : {len(accepted):,}")
     print(f"Rejected / Contended Bids: {len(rejected):,}")
-    print(f"Total Elapsed Time       : {total_duration:.3f} seconds")
-    print(f"Throughput Rate          : {len(results) / total_duration:,.1f} bids/second")
+    print(f"Total Elapsed Time       : {total_duration:.6f} seconds")
+    print(f"Throughput (Attempts/sec): {len(results) / total_duration:,.1f} validation attempts/second")
+    print(f"Accepted Throughput      : {len(accepted) / total_duration:,.1f} accepted bids/second")
 
     # Latency Percentiles
     sorted_latencies = sorted(latencies)
@@ -139,14 +140,15 @@ async def run_stress_test(total_bids: int = 5000, num_concurrent_workers: int = 
     json_path = os.path.join(out_dir, f"race_condition_stress_{ts}.json")
     evidence = {
         "benchmark_type": "REDIS_LUA_RACE_CONDITION_STRESS",
-        "description": "Concurrent bid attack verifying atomic Lua execution, zero duplicate sequences, zero gaps, and monotonic price progression",
+        "description": "In-memory Redis Lua concurrent bid-validation stress benchmark measuring atomic sequence assignment, orderbook updates, and contention handling under load. Measures Redis in-memory execution attempts/sec, NOT durable end-to-end PostgreSQL transaction throughput.",
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "total_requests": len(results),
+        "total_attempts": len(results),
         "concurrent_workers": num_concurrent_workers,
         "accepted_bids": len(accepted),
         "rejected_contended_bids": len(rejected),
-        "total_duration_seconds": round(total_duration, 4),
-        "throughput_bids_per_sec": round(len(results) / total_duration, 1),
+        "total_duration_seconds": total_duration,
+        "throughput_validation_attempts_per_sec": round(len(results) / total_duration, 1),
+        "throughput_accepted_bids_per_sec": round(len(accepted) / total_duration, 1),
         "execution_latency_ms": {
             "p50": round(p50, 3),
             "p95": round(p95, 3),

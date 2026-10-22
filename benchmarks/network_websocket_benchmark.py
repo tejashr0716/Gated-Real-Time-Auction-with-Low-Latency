@@ -273,7 +273,9 @@ async def benchmark_network_websockets(
             "python_version": sys.version.split()[0]
         },
         "target_url": ws_url,
-        "concurrent_clients_connected": len(connections),
+        "concurrent_sockets_connected": len(connections),
+        "bid_sender_sockets": 2 if len(connections) >= 2 else len(connections),
+        "active_fanout_listeners": len(listeners),
         "failed_connections": failed_connections,
         "connection_handshake_latency_ms": conn_stats,
         "point_to_point_ping_pong_latency_ms": {
@@ -327,12 +329,12 @@ async def benchmark_network_websockets(
     print("\n" + "=" * 80)
     print("📊 REAL NETWORK WEBSOCKET BENCHMARK RESULTS")
     print("=" * 80)
-    print(f"Connected Network Sockets : {len(connections)} / {client_count}")
+    print(f"Connected Network Sockets : {len(connections)} / {client_count} (2 bid-senders, {len(listeners)} fanout listeners)")
     print(f"Handshake Latency P50/P99 : {conn_stats['p50']} ms / {conn_stats['p99']} ms")
     print(f"P2P Ping/Pong     P50/P99 : {ack_stats['p50']} ms / {ack_stats['p99']} ms (N={len(ack_latencies)})")
     print(f"E2E Bid Ack       P50/P99 : {bid_ack_stats['p50']} ms / {bid_ack_stats['p99']} ms (N={len(bid_accepted_latencies)})")
     print(f"Fanout Latency    P50/P99 : {fanout_stats['p50']} ms / {fanout_stats['p99']} ms (N={len(fanout_latencies)})")
-    print(f"Broadcast Deliveries      : {actual_broadcast_deliveries} frames (Delivery: {round(min(100.0, delivery_rate), 1)}%)")
+    print(f"Broadcast Deliveries      : {actual_broadcast_deliveries} / {total_expected_broadcasts} frames across {len(listeners)} listeners (Delivery: {round(min(100.0, delivery_rate), 1)}%)")
     print(f"JSON Evidence             : {json_path}")
     print(f"CSV Evidence              : {csv_path}")
     print("=" * 80)

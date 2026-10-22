@@ -216,6 +216,62 @@ async def test_unauthorized_user_cannot_reset_auction():
             settings.DEMO_MODE = original_demo
 
 
+@pytest.mark.asyncio
+async def test_lifespan_startup_rejections_and_success():
+    """
+    Regression Test for Audit Issue A: Lifespan Security Validation
+    1. Non-demo + default secret: startup fails.
+    2. Non-demo + short secret (< 32 chars): startup fails.
+    3. Non-demo + valid test secret: startup succeeds with isolated test services.
+    4. Documented demo configuration behaves as intended.
+    5. Failed startup does not leave database connections or background tasks running.
+    """
+    from app.main import lifespan, app
+    from app.services.websocket_manager import ws_manager
+
+    original_mode = settings.DEMO_MODE
+    original_secret = settings.SECRET_KEY
+    try:
+        # 1. Non-demo + default secret: startup MUST fail
+        settings.DEMO_MODE = False
+        settings.SECRET_KEY = settings.DEFAULT_INSECURE_SECRET
+        with pytest.raises(RuntimeError) as exc_info_1:
+            async with lifespan(app):
+                pass
+        assert "INSECURE_CONFIGURATION" in str(exc_info_1.value)
+        assert ws_manager.heartbeat_task is None
+
+        # 2. Non-demo + short secret: startup MUST fail
+        settings.DEMO_MODE = False
+        settings.SECRET_KEY = "short_insecure_secret_123"
+        with pytest.raises(RuntimeError) as exc_info_2:
+            async with lifespan(app):
+                pass
+        assert "INSECURE_CONFIGURATION" in str(exc_info_2.value)
+        assert ws_manager.heartbeat_task is None
+
+        # 3. Non-demo + valid secure secret (>= 32 chars): startup MUST succeed
+        settings.DEMO_MODE = False
+        settings.SECRET_KEY = "a_very_secure_and_long_production_test_secret_key_2026_99"
+        async with lifespan(app):
+            assert ws_manager.heartbeat_task is not None
+            assert not ws_manager.heartbeat_task.done()
+
+        # After clean shutdown, background task must be cleaned up
+        assert ws_manager.heartbeat_task is None
+
+        # 4. Documented demo mode: startup succeeds even with default secret
+        settings.DEMO_MODE = True
+        settings.SECRET_KEY = settings.DEFAULT_INSECURE_SECRET
+        async with lifespan(app):
+            assert ws_manager.heartbeat_task is not None
+        assert ws_manager.heartbeat_task is None
+
+    finally:
+        settings.DEMO_MODE = original_mode
+        settings.SECRET_KEY = original_secret
+
+
 # ============================================================================
 # SECTION B: PERSISTENCE TRANSACTIONS & RETRY SAFETY REGRESSION TESTS
 # ============================================================================
@@ -349,6 +405,94 @@ async def test_worker_retains_stream_message_on_db_failure_repaired():
     finally:
         await db_service.execute("DELETE FROM bids WHERE auction_id = $1 AND sequence_id = $2", aid, test_seq)
         await client.delete(stream_key)
+
+
+@pytest.mark.asyncio
+async def test_production_worker_persistence_rollback_retry_and_idempotency():
+    """
+    Regression Test for Audit Issue F:
+    Exercises the actual production WriteBehindSyncWorker.process_streams() / persist_bid_transaction() path:
+    1. Injects failure during auction UPDATE after ledger INSERT using a temporary PostgreSQL trigger.
+    2. Verifies the ledger insert rolls back cleanly (0 ledger entries).
+    3. Verifies the Redis stream message remains retained for retry.
+    4. Removes the injected failure and retries worker pass.
+    5. Verifies exactly one ledger entry, correct catalog state, and message deletion from stream.
+    6. Replays the same message and verifies sequence monotonic protection (no double-counting).
+    """
+    client = redis_service.get_client()
+    aid = f"auc_tx_{uuid.uuid4().hex[:8]}"
+    uid = "a0000001-0000-0000-0000-000000000001"
+    key = f"auction_stream:{aid}"
+
+    # Setup isolated test auction in DB and Redis
+    await db_service.execute(
+        """INSERT INTO auctions (id, title, description, category, starting_price, current_price, reserve_price, min_increment, min_escrow_required, status, start_time, end_time, bid_count, sequence_id)
+           VALUES ($1, 'TxTest', 'Test Desc', 'AUTO', 100000.0, 100000.0, 200000.0, 100.0, 5000.0, 'ACTIVE', NOW(), NOW() + INTERVAL '1 hour', 0, 0)
+           ON CONFLICT (id) DO UPDATE SET current_price=100000.0, sequence_id=0, bid_count=0""",
+        aid
+    )
+    await db_service.execute("DELETE FROM bids WHERE auction_id = $1", aid)
+    await client.delete(key)
+
+    # 1. Install failure trigger on auctions table
+    await db_service.execute(
+        "CREATE OR REPLACE FUNCTION audit_fail_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'AUDIT_UPDATE_FAILURE'; END $$"
+    )
+    await db_service.execute(
+        "CREATE TRIGGER audit_update_failure BEFORE UPDATE ON auctions FOR EACH ROW EXECUTE FUNCTION audit_fail_update()"
+    )
+
+    # 2. Add message to stream
+    await client.xadd(key, {
+        "auction_id": aid,
+        "bidder_id": uid,
+        "bidder_name": "TxAuditTester",
+        "sequence_id": "1",
+        "amount": "150000.0"
+    })
+
+    worker = WriteBehindSyncWorker()
+    try:
+        # Run worker with failure active
+        await worker.process_streams()
+
+        # Verify rollback: ledger insert must be rolled back, auction unchanged, stream message retained
+        bids_count = await db_service.fetchrow("SELECT count(*) AS n FROM bids WHERE auction_id = $1", aid)
+        assert bids_count["n"] == 0, f"Ledger insert failed to roll back! Found {bids_count['n']} bids"
+        auc_state = await db_service.fetchrow("SELECT sequence_id, bid_count FROM auctions WHERE id = $1", aid)
+        assert auc_state["sequence_id"] == 0 and auc_state["bid_count"] == 0
+
+        stream_len = await client.xlen(key)
+        assert stream_len == 1, f"Failed stream message was not retained for retry! Length: {stream_len}"
+
+    finally:
+        # 3. Clean up trigger
+        await db_service.execute("DROP TRIGGER IF EXISTS audit_update_failure ON auctions")
+        await db_service.execute("DROP FUNCTION IF EXISTS audit_fail_update()")
+
+    # 4. Retry worker pass without failure
+    await worker.process_streams()
+
+    # Verify successful persistence
+    bids_after = await db_service.fetchrow("SELECT count(*) AS n FROM bids WHERE auction_id = $1", aid)
+    assert bids_after["n"] == 1, f"Expected 1 persisted bid after retry, got {bids_after['n']}"
+    auc_after = await db_service.fetchrow("SELECT sequence_id, bid_count, current_price FROM auctions WHERE id = $1", aid)
+    assert auc_after["sequence_id"] == 1
+    assert auc_after["bid_count"] == 1
+    assert float(auc_after["current_price"]) == 150000.0
+
+    stream_after = await client.xlen(key)
+    assert stream_after == 0, f"Expected message to be pruned via XDEL after successful commit, got {stream_after}"
+
+    # 5. Replay same message: must NOT double-count bid_count
+    await db_service.persist_bid_transaction(aid, uid, "TxAuditTester", 1, 150000.0)
+    auc_replay = await db_service.fetchrow("SELECT sequence_id, bid_count FROM auctions WHERE id = $1", aid)
+    assert auc_replay["bid_count"] == 1, f"Duplicate replay double-counted! Expected 1, got {auc_replay['bid_count']}"
+
+    # Cleanup
+    await db_service.execute("DELETE FROM bids WHERE auction_id = $1", aid)
+    await db_service.execute("DELETE FROM auctions WHERE id = $1", aid)
+    await client.delete(key)
 
 
 # ============================================================================

@@ -113,6 +113,18 @@ class WebSocketManager:
         if not self.heartbeat_task:
             self.heartbeat_task = asyncio.create_task(self._heartbeat_worker())
 
+    async def stop_heartbeat_loop(self):
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+            try:
+                await self.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self.heartbeat_task = None
+        for task in list(self.pubsub_tasks.values()):
+            task.cancel()
+        self.pubsub_tasks.clear()
+
     async def _heartbeat_worker(self):
         while True:
             try:
