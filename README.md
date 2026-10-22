@@ -42,7 +42,7 @@ flowchart TD
     end
 
     subgraph WorkerLayer["⚙️ Asynchronous Write-Behind Worker"]
-        SyncWorker["worker.py (XREAD Consumer Group)"]
+        SyncWorker["worker.py (Single-Worker XREAD + Transactional Persistence + XDEL)"]
     end
 
     subgraph DatabaseLayer["🐘 PostgreSQL Persistence & Financial Ledger"]
@@ -77,12 +77,12 @@ flowchart TD
 
 | Invariant / Mechanism | Architectural Implementation | Measured & Verified Outcome |
 | :--- | :--- | :--- |
-| **Race Condition Immunity** | Single-threaded atomic evaluation via custom **Redis Lua script** (`place_bid.lua`) | **Zero race conditions** under 3,000 concurrent bids across 50 async workers (`7,779.3 bids/sec`). 100% contiguous sequence chain ($1..N$) with zero duplicates and zero gaps. |
-| **Real Network WebSocket Acknowledgment** | Direct WebSocket handler in `websocket.py` replying to client PING or BID receipts | **P50 Ack Latency: 1.13 ms** (P99: 9.89 ms) measured across 50 concurrent network TCP WebSocket connections. |
-| **Network Broadcast Fanout** | Redis Pub/Sub listener triggering non-blocking `asyncio.gather` TCP socket sends | **P50 Fanout Latency: 2.42 ms** (P99: 6.19 ms) across 50 concurrent network sockets over TCP loopback (100% frame delivery, 0% packet loss). |
+| **Atomic In-Memory Evaluation** | Single-threaded atomic evaluation via custom **Redis Lua script** (`place_bid.lua`) | Under 2,000 concurrent bid attempts across 50 async workers, sustained **11,318 validation attempts/sec** (1,950 accepted, 50 contended). Observed 100% contiguous sequence chain ($1..1950$) with zero duplicate sequence IDs and zero gaps. |
+| **Real Network WebSocket Acknowledgment** | Direct WebSocket handler in `websocket.py` replying to client PING or HMAC-authenticated BID receipts | **P50 Ack Latency: 1.06 ms** (P99: 2.65 ms PING/PONG, P50: 2.30 ms bid ack) measured across 50 concurrent network TCP WebSocket connections. |
+| **Network Broadcast Fanout** | Redis Pub/Sub listener triggering non-blocking `asyncio.gather` TCP socket sends | **P50 Fanout Latency: 1.74 ms** (P99: 7.25 ms) across 48 fanout listeners (720/720 frames delivered; 100% application-message completeness over TCP loopback). |
 | **Anti-Sniping Soft-Close Extension** | Lua script auto-extends auction deadline by `+30s` if bid is placed within final `15s` window | Neutralizes last-millisecond automated sniping advantages by reopening bidding to all participants. |
 | **Economic Gating & Collateral Escrow** | Atomic escrow balance validation and collateral lock held in Redis memory | Rejects bids where unencumbered balance is below required collateral. Superseded bidders have collateral automatically freed. |
-| **Durability Without Latency Penalty** | Asynchronous Write-Behind Stream Worker (`auction_stream:*` $\to$ PostgreSQL `bids`) | Hot execution path completes in memory; worker persists records with idempotent deduplication (`UNIQUE(auction_id, sequence_id)`). |
+| **Durability Without Latency Penalty** | Asynchronous Write-Behind Stream Worker (`auction_stream:*` $\to$ PostgreSQL `bids`) | Single-worker `XREAD` batches persisted in atomic ACID transaction (bid ledger insert + auction update); messages pruned via `XDEL` only upon successful commit and retained on failure. |
 
 > [!NOTE]
 > **Bot Protection Scope:** Bot mitigation in this project consists of **economic gating** (verifying deposited escrow collateral before granting an HMAC gate pass) and **anti-sniping soft-close timer extension** in Lua. It does *not* include ML-based bot classification or CAPTCHA challenges.
@@ -140,32 +140,34 @@ All benchmarks were run against a live local instance (Apple Silicon arm64, Pyth
 
 ### 1. Real Network TCP WebSocket Benchmark
 - **Script:** `python benchmarks/network_websocket_benchmark.py 50 10 15`
-- **Methodology:** Launches 50 concurrent network WebSocket connections over TCP loopback to `ws://127.0.0.1:8000/ws/auctions/auc_shelby_gt500`.
-- **Connections:** 50 / 50 connected (0 failures)
-- **Handshake Latency:** P50 = 94.94 ms, P99 = 109.78 ms
-- **Point-to-Point Ack Latency (PING/PONG):** P50 = **1.13 ms**, P95 = 5.21 ms, P99 = **9.89 ms** ($N=500$ samples)
-- **Broadcast Fanout Latency:** P50 = **2.42 ms**, P95 = 4.88 ms, P99 = **6.19 ms** ($N=735$ deliveries)
-- **Frame Delivery Completeness:** 735 / 735 frames (**100.0% delivery, 0% packet loss**)
+- **Methodology:** Launches 50 concurrent network WebSocket connections over TCP loopback to `ws://127.0.0.1:8000/ws/auctions/auc_shelby_gt500` (2 dedicated bid-sender clients and 48 fanout listener clients).
+- **Connections:** 50 / 50 connected (0 connection failures)
+- **Handshake Latency:** P50 = 93.19 ms, P99 = 112.45 ms
+- **Point-to-Point Ack Latency (PING/PONG):** P50 = **1.06 ms**, P95 = 2.01 ms, P99 = **2.65 ms** ($N=500$ echo-matched samples)
+- **End-to-End Bid Acknowledgment Latency:** P50 = **2.30 ms**, P95 = 4.19 ms, P99 = **6.08 ms** ($N=10$ accepted bids)
+- **Broadcast Fanout Latency:** P50 = **1.74 ms**, P95 = 4.39 ms, P99 = **7.25 ms** ($N=720$ deliveries across 48 listeners)
+- **Application-Message Completeness:** 720 / 720 frames (**100.0% delivery completeness across listeners over TCP loopback**)
 - **Evidence Files:**
-  - JSON: [`benchmarks/results/network_websocket_benchmark_1792684300.json`](benchmarks/results/network_websocket_benchmark_1792684300.json)
-  - CSV: [`benchmarks/results/network_websocket_benchmark_1792684300.csv`](benchmarks/results/network_websocket_benchmark_1792684300.csv)
+  - JSON: [`benchmarks/results/network_websocket_benchmark_1792692384.json`](benchmarks/results/network_websocket_benchmark_1792692384.json)
+  - CSV: [`benchmarks/results/network_websocket_benchmark_1792692384.csv`](benchmarks/results/network_websocket_benchmark_1792692384.csv)
 
-### 2. High-Concurrency Race Condition Stress Test
-- **Script:** `python benchmarks/race_condition_stress.py 3000 50`
-- **Methodology:** Dispatches 3,000 bids simultaneously across 50 concurrent async workers contending for the orderbook.
-- **Total Requests Processed:** 3,000 bids
-- **Accepted Winning Bids:** 2,602
-- **Contended / Rejected Bids:** 398 (rejected cleanly with proper error codes)
-- **Elapsed Time:** 0.386 seconds
-- **Throughput:** **7,779.3 bids/second**
-- **Execution Latency:** P50 = **4.89 ms**, P95 = **7.14 ms**, P99 = **35.66 ms**
-- **Mathematical Invariants Verified:**
+### 2. High-Concurrency Contention Stress Test
+- **Script:** `python benchmarks/race_condition_stress.py 2000 50`
+- **Methodology:** Dispatches 2,000 bid attempts simultaneously across 50 concurrent async workers contending for the orderbook in Redis.
+- **Scope Notice:** Measures Redis in-memory single-threaded Lua atomic bid-validation attempts/sec under contention, not durable end-to-end PostgreSQL transaction throughput.
+- **Total Attempts Processed:** 2,000 attempts
+- **Accepted Winning Bids:** 1,950
+- **Contended / Rejected Bids:** 50 (rejected cleanly with proper error codes)
+- **Elapsed Time:** 0.176708 seconds
+- **Validation Throughput:** **11,318.1 validation attempts/second** (11,035.1 accepted bids/second)
+- **Execution Latency:** P50 = **2.48 ms**, P95 = **4.43 ms**, P99 = **38.52 ms**
+- **Observed Invariants in Tested Workload:**
   1. `assert len(sequences) == len(set(sequences))` — **ZERO duplicate sequence IDs**.
-  2. `assert sorted(sequences) == list(range(1, 2603))` — **Contiguous sequence chain (1..2602) with ZERO gaps**.
-  3. `assert final_seq == 2602` — **Redis metadata sequence exactly equals accepted bid count**.
+  2. `assert sorted(sequences) == list(range(1, 1951))` — **Contiguous sequence chain (1..1950) with ZERO gaps**.
+  3. `assert final_seq == 1950` — **Redis metadata sequence exactly equals accepted bid count**.
   4. Final price verified mathematically against cumulative accepted increments.
 - **Evidence File:**
-  - JSON: [`benchmarks/results/race_condition_stress_1792684307.json`](benchmarks/results/race_condition_stress_1792684307.json)
+  - JSON: [`benchmarks/results/race_condition_stress_1792692367.json`](benchmarks/results/race_condition_stress_1792692367.json)
 
 ### 3. In-Process Coroutine Fanout Microbenchmark
 - **Script:** `python benchmarks/telemetry_500_clients.py 500 25`
@@ -238,7 +240,7 @@ Gated-Real-Time-Auction-with-Low-Latency/
 ├── backend/
 │   ├── Dockerfile                   # Container definition
 │   ├── requirements.txt             # Production dependencies
-│   ├── worker.py                    # Standalone background consumer worker (Postgres sync)
+│   ├── worker.py                    # Standalone background worker (Single-worker XREAD, ACID transaction, XDEL)
 │   ├── app/
 │   │   ├── main.py                  # FastAPI gateway, lifespan manager & template mounts
 │   │   ├── config.py                # Pydantic Settings (Redis, Postgres, Security)
@@ -248,7 +250,7 @@ Gated-Real-Time-Auction-with-Low-Latency/
 │   │   ├── routers/                 # REST and WebSocket endpoints
 │   │   ├── services/                # Redis, Database, WebSocketManager, LuaEngine
 │   │   └── templates/index.html     # Luxury terminal dashboard
-│   └── tests/                       # 15 automated pytest cases
+│   └── tests/                       # 29 automated pytest regression and integration test cases
 └── benchmarks/
     ├── network_websocket_benchmark.py # Real network TCP WebSocket benchmark
     ├── race_condition_stress.py       # Atomic Redis Lua concurrency stress test
