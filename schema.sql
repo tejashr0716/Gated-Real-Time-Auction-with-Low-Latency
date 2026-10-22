@@ -126,11 +126,11 @@ CREATE TABLE telemetry_metrics (
 
 -- Seed 5 VIP / Platinum Bidders
 INSERT INTO users (id, username, email, hashed_password, full_name, kyc_status, tier) VALUES
-('a0000001-0000-0000-0000-000000000001', 'apex_collector', 'apex@sothebys-vip.com', '$2b$12$e80yq7K9bL9rD6y1tWfJse8F6dD3yS8T9Wq1tWfJse8F6dD3yS8T9', 'Alistair Vance', 'VIP', 'DIAMOND'),
-('a0000002-0000-0000-0000-000000000002', 'hyper_bidder', 'hyper@monacoprivate.mc', '$2b$12$e80yq7K9bL9rD6y1tWfJse8F6dD3yS8T9Wq1tWfJse8F6dD3yS8T9', 'Elena Rostova', 'VIP', 'DIAMOND'),
-('a0000003-0000-0000-0000-000000000003', 'geneva_vault', 'vault@geneva-reserve.ch', '$2b$12$e80yq7K9bL9rD6y1tWfJse8F6dD3yS8T9Wq1tWfJse8F6dD3yS8T9', 'Henri Laurent', 'VERIFIED', 'PLATINUM'),
-('a0000004-0000-0000-0000-000000000004', 'nordic_fund', 'bids@nordicquant.oslo', '$2b$12$e80yq7K9bL9rD6y1tWfJse8F6dD3yS8T9Wq1tWfJse8F6dD3yS8T9', 'Astrid Lindholm', 'VERIFIED', 'PLATINUM'),
-('a0000005-0000-0000-0000-000000000005', 'silicon_syndicate', 'partner@angelventures.sf', '$2b$12$e80yq7K9bL9rD6y1tWfJse8F6dD3yS8T9Wq1tWfJse8F6dD3yS8T9', 'Marcus Chen', 'VERIFIED', 'GOLD');
+('a0000001-0000-0000-0000-000000000001', 'apex_collector', 'apex@sothebys-vip.com', '$2b$12$9GZFtC2R3xBteqjak1Ksi.jpHrK8W0HnVkiw4h9tIUTxoNBfzhL0.', 'Alistair Vance', 'VIP', 'DIAMOND'),
+('a0000002-0000-0000-0000-000000000002', 'hyper_bidder', 'hyper@monacoprivate.mc', '$2b$12$9GZFtC2R3xBteqjak1Ksi.jpHrK8W0HnVkiw4h9tIUTxoNBfzhL0.', 'Elena Rostova', 'VIP', 'DIAMOND'),
+('a0000003-0000-0000-0000-000000000003', 'geneva_vault', 'vault@geneva-reserve.ch', '$2b$12$9GZFtC2R3xBteqjak1Ksi.jpHrK8W0HnVkiw4h9tIUTxoNBfzhL0.', 'Henri Laurent', 'VERIFIED', 'PLATINUM'),
+('a0000004-0000-0000-0000-000000000004', 'nordic_fund', 'bids@nordicquant.oslo', '$2b$12$9GZFtC2R3xBteqjak1Ksi.jpHrK8W0HnVkiw4h9tIUTxoNBfzhL0.', 'Astrid Lindholm', 'VERIFIED', 'PLATINUM'),
+('a0000005-0000-0000-0000-000000000005', 'silicon_syndicate', 'partner@angelventures.sf', '$2b$12$9GZFtC2R3xBteqjak1Ksi.jpHrK8W0HnVkiw4h9tIUTxoNBfzhL0.', 'Marcus Chen', 'VERIFIED', 'GOLD');
 
 -- Seed Escrow Accounts with heavy collateral balances
 INSERT INTO escrow_accounts (user_id, total_balance, locked_collateral, currency) VALUES

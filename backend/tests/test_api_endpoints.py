@@ -1,12 +1,22 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
 from app.main import app
+from app.services.auth_security import create_access_token
 
 @pytest.fixture
 async def async_client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+@pytest.fixture
+def auth_headers():
+    token = create_access_token(
+        user_id="a0000001-0000-0000-0000-000000000001",
+        username="apex_collector",
+        tier="VIP"
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 @pytest.mark.asyncio
 async def test_health_check_endpoint(async_client):
@@ -38,10 +48,10 @@ async def test_get_single_auction(async_client):
     assert data["reserve_met"] is not None
 
 @pytest.mark.asyncio
-async def test_gate_pass_clearance(async_client):
+async def test_gate_pass_clearance(async_client, auth_headers):
     response = await async_client.post(
         "/api/auth/gate-pass",
-        headers={"X-User-Id": "a0000001-0000-0000-0000-000000000001"},
+        headers=auth_headers,
         json={"auction_id": "auc_shelby_gt500", "required_collateral": 15000.0}
     )
     assert response.status_code == 200
@@ -51,13 +61,12 @@ async def test_gate_pass_clearance(async_client):
     assert data["tier"] == "DIAMOND"
 
 @pytest.mark.asyncio
-async def test_escrow_balance_and_deposit(async_client):
-    user_id = "a0000001-0000-0000-0000-000000000001"
-    res1 = await async_client.get("/api/escrow/balance", headers={"X-User-Id": user_id})
+async def test_escrow_balance_and_deposit(async_client, auth_headers):
+    res1 = await async_client.get("/api/escrow/balance", headers=auth_headers)
     assert res1.status_code == 200
     bal1 = res1.json()["total_balance"]
 
-    res2 = await async_client.post("/api/escrow/deposit", headers={"X-User-Id": user_id}, json={"amount": 25000.0})
+    res2 = await async_client.post("/api/escrow/deposit", headers=auth_headers, json={"amount": 25000.0})
     assert res2.status_code == 200
     bal2 = res2.json()["total_balance"]
     assert bal2 == bal1 + 25000.0

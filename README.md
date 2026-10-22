@@ -42,7 +42,7 @@ flowchart TD
     end
 
     subgraph WorkerLayer["⚙️ Asynchronous Write-Behind Worker"]
-        SyncWorker["worker.py (XREAD Consumer Group)"]
+        SyncWorker["worker.py (Single-Worker XREAD + Transactional Persistence + XDEL)"]
     end
 
     subgraph DatabaseLayer["🐘 PostgreSQL Persistence & Financial Ledger"]
@@ -79,10 +79,10 @@ flowchart TD
 | :--- | :--- | :--- |
 | **Race Condition Immunity** | Single-threaded atomic evaluation via custom **Redis Lua script** (`place_bid.lua`) | **Zero race conditions** under 3,000 concurrent bids across 50 async workers (`7,779.3 bids/sec`). 100% contiguous sequence chain ($1..N$) with zero duplicates and zero gaps. |
 | **Real Network WebSocket Acknowledgment** | Direct WebSocket handler in `websocket.py` replying to client PING or BID receipts | **P50 Ack Latency: 1.13 ms** (P99: 9.89 ms) measured across 50 concurrent network TCP WebSocket connections. |
-| **Network Broadcast Fanout** | Redis Pub/Sub listener triggering non-blocking `asyncio.gather` TCP socket sends | **P50 Fanout Latency: 2.42 ms** (P99: 6.19 ms) across 50 concurrent network sockets over TCP loopback (100% frame delivery, 0% packet loss). |
+| **Network Broadcast Fanout** | Redis Pub/Sub listener triggering non-blocking `asyncio.gather` TCP socket sends | **P50 Fanout Latency: 2.42 ms** (P99: 6.19 ms) across 50 concurrent network sockets over TCP loopback (100% application-message completeness over TCP/WebSocket). |
 | **Anti-Sniping Soft-Close Extension** | Lua script auto-extends auction deadline by `+30s` if bid is placed within final `15s` window | Neutralizes last-millisecond automated sniping advantages by reopening bidding to all participants. |
 | **Economic Gating & Collateral Escrow** | Atomic escrow balance validation and collateral lock held in Redis memory | Rejects bids where unencumbered balance is below required collateral. Superseded bidders have collateral automatically freed. |
-| **Durability Without Latency Penalty** | Asynchronous Write-Behind Stream Worker (`auction_stream:*` $\to$ PostgreSQL `bids`) | Hot execution path completes in memory; worker persists records with idempotent deduplication (`UNIQUE(auction_id, sequence_id)`). |
+| **Durability Without Latency Penalty** | Asynchronous Write-Behind Stream Worker (`auction_stream:*` $\to$ PostgreSQL `bids`) | Single-worker `XREAD` batches persisted in atomic ACID transaction (bid ledger insert + auction update); messages pruned via `XDEL` only upon successful commit and retained on failure. |
 
 > [!NOTE]
 > **Bot Protection Scope:** Bot mitigation in this project consists of **economic gating** (verifying deposited escrow collateral before granting an HMAC gate pass) and **anti-sniping soft-close timer extension** in Lua. It does *not* include ML-based bot classification or CAPTCHA challenges.
@@ -238,7 +238,7 @@ Gated-Real-Time-Auction-with-Low-Latency/
 ├── backend/
 │   ├── Dockerfile                   # Container definition
 │   ├── requirements.txt             # Production dependencies
-│   ├── worker.py                    # Standalone background consumer worker (Postgres sync)
+│   ├── worker.py                    # Standalone background worker (Single-worker XREAD, ACID transaction, XDEL)
 │   ├── app/
 │   │   ├── main.py                  # FastAPI gateway, lifespan manager & template mounts
 │   │   ├── config.py                # Pydantic Settings (Redis, Postgres, Security)
@@ -248,7 +248,7 @@ Gated-Real-Time-Auction-with-Low-Latency/
 │   │   ├── routers/                 # REST and WebSocket endpoints
 │   │   ├── services/                # Redis, Database, WebSocketManager, LuaEngine
 │   │   └── templates/index.html     # Luxury terminal dashboard
-│   └── tests/                       # 15 automated pytest cases
+│   └── tests/                       # 27 automated pytest regression and integration test cases
 └── benchmarks/
     ├── network_websocket_benchmark.py # Real network TCP WebSocket benchmark
     ├── race_condition_stress.py       # Atomic Redis Lua concurrency stress test

@@ -1,0 +1,5 @@
+Metric,P50_ms,P95_ms,P99_ms,Min_ms,Max_ms,Samples/Count
+Connection Handshake,36.98,38.882,85.384,33.917,85.384,50
+P2P Ping/Pong Latency,1.099,4.852,6.089,0.166,7.071,500
+E2E Authenticated Bid Ack,3.027,9.036,9.036,1.616,9.036,10
+Redis Pub/Sub Fanout,1.627,5.127,5.689,0.689,5.914,720

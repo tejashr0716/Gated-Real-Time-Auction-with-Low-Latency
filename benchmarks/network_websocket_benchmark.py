@@ -87,19 +87,21 @@ async def benchmark_network_websockets(
 
     async def ping_worker(ws, client_idx: int):
         nonlocal ack_errors
-        for _ in range(ping_samples_per_client):
+        for p_idx in range(ping_samples_per_client):
             t_ping = time.perf_counter()
-            payload = json.dumps({"action": "PING", "ts": t_ping})
+            echo_marker = f"c{client_idx}_p{p_idx}_{int(t_ping * 1000)}"
+            payload = json.dumps({"action": "PING", "ts": t_ping, "echo_marker": echo_marker})
             try:
                 await ws.send(payload)
-                resp_text = await asyncio.wait_for(ws.recv(), timeout=3.0)
-                resp = json.loads(resp_text)
-                if resp.get("event") == "PONG":
-                    t_pong = time.perf_counter()
-                    ack_latencies.append((t_pong - t_ping) * 1000.0)
-                else:
-                    t_pong = time.perf_counter()
-                    ack_latencies.append((t_pong - t_ping) * 1000.0)
+                while True:
+                    resp_text = await asyncio.wait_for(ws.recv(), timeout=3.0)
+                    resp = json.loads(resp_text)
+                    if resp.get("event") == "PONG":
+                        # Match PONG to corresponding PING by echo marker
+                        if resp.get("echo_marker") == echo_marker or resp.get("echo_ts") == t_ping:
+                            t_pong = time.perf_counter()
+                            ack_latencies.append((t_pong - t_ping) * 1000.0)
+                            break
             except Exception:
                 ack_errors += 1
             await asyncio.sleep(0.01)
@@ -108,47 +110,78 @@ async def benchmark_network_websockets(
     await asyncio.gather(*ping_tasks)
 
     # Step 2b: Measure End-to-End Authenticated Bid Acknowledgment Latency
-    print(f"[*] Measuring End-to-End Authenticated WebSocket Bid Acknowledgment Latency (10 bids)...")
+    # Alternating between at least two valid bidders to ensure bids compete and are accepted (Audit Requirement C.1)
+    print(f"[*] Measuring End-to-End Authenticated WebSocket Bid Acknowledgment Latency (10 alternating bids)...")
     from app.services.redis_client import redis_service
     from app.services.auth_security import create_access_token
     from app.services.lua_engine import lua_engine
     await redis_service.connect()
-    test_user_id = "a0000001-0000-0000-0000-000000000001"
-    auth_token = create_access_token(test_user_id, "BenchmarkBidder")
-    await lua_engine.set_user_escrow(test_user_id, 1000000.0, 0.0)
+
+    bidder_1_id = "a0000001-0000-0000-0000-000000000001"
+    bidder_2_id = "a0000002-0000-0000-0000-000000000002"
+    token_1 = create_access_token(bidder_1_id, "apex_collector", "VIP")
+    token_2 = create_access_token(bidder_2_id, "velocity_trader", "PRO")
+
+    await lua_engine.set_user_escrow(bidder_1_id, 1000000.0, 0.0)
+    await lua_engine.set_user_escrow(bidder_2_id, 1000000.0, 0.0)
     await lua_engine.reset_auction(auction_id, 100000.0, 200000.0, 25.0, 3600)
 
-    bid_ack_latencies = []
-    bidder_client = connections[0]
+    bid_accepted_latencies = []
+    bid_rejected_count = 0
+    bid_rejected_details = []
+
+    client_1 = connections[0]
+    client_2 = connections[1] if len(connections) > 1 else connections[0]
+
     for b_step in range(1, 11):
-        bid_amount = 100000.0 + (b_step * 50.0)
+        is_odd = (b_step % 2 == 1)
+        active_client = client_1 if is_odd else client_2
+        active_token = token_1 if is_odd else token_2
+        active_bidder_id = bidder_1_id if is_odd else bidder_2_id
+        bid_amount = 100000.0 + (b_step * 100.0)
+        req_id = f"bench_bid_{b_step}"
+
         t_bid_send = time.perf_counter()
-        await bidder_client.send(json.dumps({
+        await active_client.send(json.dumps({
             "action": "BID",
-            "token": auth_token,
+            "req_id": req_id,
+            "token": active_token,
             "amount": bid_amount
         }))
-        # Wait for BID_RECEIPT
+
+        # Wait for matching BID_RECEIPT
         try:
-            while True:
-                msg_raw = await asyncio.wait_for(bidder_client.recv(), timeout=3.0)
+            matched_receipt = False
+            while not matched_receipt:
+                msg_raw = await asyncio.wait_for(active_client.recv(), timeout=3.0)
                 msg_json = json.loads(msg_raw)
-                if msg_json.get("event") == "BID_RECEIPT":
+                event = msg_json.get("event")
+                if event == "BID_RECEIPT" and msg_json.get("req_id") == req_id:
                     t_bid_recv = time.perf_counter()
-                    bid_ack_latencies.append((t_bid_recv - t_bid_send) * 1000.0)
-                    break
+                    matched_receipt = True
+                    result = msg_json.get("result", {})
+                    # Verify accepted bids (Audit Requirement C.2)
+                    if result.get("ok") is True:
+                        bid_accepted_latencies.append((t_bid_recv - t_bid_send) * 1000.0)
+                    else:
+                        bid_rejected_count += 1
+                        bid_rejected_details.append(result)
+                elif event == "BID_REJECTED" and msg_json.get("req_id") == req_id:
+                    bid_rejected_count += 1
+                    bid_rejected_details.append(msg_json)
+                    matched_receipt = True
         except Exception as e:
-            print(f"⚠️ Bid receipt error: {e}")
+            print(f"⚠️ Bid receipt error for {req_id}: {e}")
+            bid_rejected_count += 1
         await asyncio.sleep(0.02)
 
+    print(f"[+] Authenticated Bids: {len(bid_accepted_latencies)} accepted, {bid_rejected_count} rejected")
+
     # Step 3: Measure Broadcast Fanout Latency
-    # One designated client (connections[0]) submits bids, while all other clients (listeners) receive the broadcast
     print(f"[*] Measuring Broadcast Fanout Latency over {broadcast_ticks} high-frequency ticks...")
-    sender = connections[0]
-    listeners = connections[1:]
+    listeners = connections[2:] if len(connections) > 2 else connections
     fanout_latencies = []
     received_frames = [0] * len(listeners)
-    fanout_errors = 0
 
     async def listener_worker(ws, idx: int, stop_event: asyncio.Event):
         while not stop_event.is_set():
@@ -199,7 +232,7 @@ async def benchmark_network_websockets(
     # Compute Statistics
     sorted_conn = sorted(connection_latencies) if connection_latencies else [0.0]
     sorted_ack = sorted(ack_latencies) if ack_latencies else [0.0]
-    sorted_bid_ack = sorted(bid_ack_latencies) if bid_ack_latencies else [0.0]
+    sorted_bid_ack = sorted(bid_accepted_latencies) if bid_accepted_latencies else [0.0]
     sorted_fanout = sorted(fanout_latencies) if fanout_latencies else [0.0]
 
     def calc_percentiles(arr):
@@ -225,7 +258,8 @@ async def benchmark_network_websockets(
     # Real Assertions
     assert failed_connections == 0, f"Benchmark failed: {failed_connections} connection errors encountered"
     assert actual_broadcast_deliveries == total_expected_broadcasts, f"Delivery mismatch: {actual_broadcast_deliveries} != {total_expected_broadcasts}"
-    assert len(bid_ack_latencies) > 0, "No authenticated bid acknowledgments completed"
+    assert len(bid_accepted_latencies) > 0, "No authenticated bids were accepted"
+    assert bid_rejected_count == 0, f"Unexpected bid rejections: {bid_rejected_details}"
 
     summary = {
         "benchmark_type": "REAL_NETWORK_WEBSOCKET_BENCHMARK",
@@ -249,7 +283,9 @@ async def benchmark_network_websockets(
         },
         "end_to_end_authenticated_bid_ack_latency_ms": {
             **bid_ack_stats,
-            "total_samples": len(bid_ack_latencies)
+            "accepted_bids": len(bid_accepted_latencies),
+            "rejected_bids": bid_rejected_count,
+            "rejected_details": bid_rejected_details
         },
         "broadcast_fanout_latency_ms": {
             **fanout_stats,
@@ -260,8 +296,14 @@ async def benchmark_network_websockets(
         },
         "assertions_verified": {
             "zero_connection_failures": True,
-            "zero_packet_loss": True,
-            "authenticated_bid_acks_received": True
+            "application_message_completeness_over_websocket": True,
+            "all_authenticated_bids_accepted": True
+        },
+        "raw_samples": {
+            "connection_handshake_latencies_ms": connection_latencies,
+            "point_to_point_ping_pong_latencies_ms": ack_latencies,
+            "authenticated_bid_ack_latencies_ms": bid_accepted_latencies,
+            "broadcast_fanout_latencies_ms": fanout_latencies
         }
     }
 
@@ -279,7 +321,7 @@ async def benchmark_network_websockets(
         writer.writerow(["Metric", "P50_ms", "P95_ms", "P99_ms", "Min_ms", "Max_ms", "Samples/Count"])
         writer.writerow(["Connection Handshake", conn_stats["p50"], conn_stats["p95"], conn_stats["p99"], conn_stats["min"], conn_stats["max"], len(connections)])
         writer.writerow(["P2P Ping/Pong Latency", ack_stats["p50"], ack_stats["p95"], ack_stats["p99"], ack_stats["min"], ack_stats["max"], len(ack_latencies)])
-        writer.writerow(["E2E Authenticated Bid Ack", bid_ack_stats["p50"], bid_ack_stats["p95"], bid_ack_stats["p99"], bid_ack_stats["min"], bid_ack_stats["max"], len(bid_ack_latencies)])
+        writer.writerow(["E2E Authenticated Bid Ack", bid_ack_stats["p50"], bid_ack_stats["p95"], bid_ack_stats["p99"], bid_ack_stats["min"], bid_ack_stats["max"], len(bid_accepted_latencies)])
         writer.writerow(["Redis Pub/Sub Fanout", fanout_stats["p50"], fanout_stats["p95"], fanout_stats["p99"], fanout_stats["min"], fanout_stats["max"], len(fanout_latencies)])
 
     print("\n" + "=" * 80)
@@ -288,7 +330,7 @@ async def benchmark_network_websockets(
     print(f"Connected Network Sockets : {len(connections)} / {client_count}")
     print(f"Handshake Latency P50/P99 : {conn_stats['p50']} ms / {conn_stats['p99']} ms")
     print(f"P2P Ping/Pong     P50/P99 : {ack_stats['p50']} ms / {ack_stats['p99']} ms (N={len(ack_latencies)})")
-    print(f"E2E Bid Ack       P50/P99 : {bid_ack_stats['p50']} ms / {bid_ack_stats['p99']} ms (N={len(bid_ack_latencies)})")
+    print(f"E2E Bid Ack       P50/P99 : {bid_ack_stats['p50']} ms / {bid_ack_stats['p99']} ms (N={len(bid_accepted_latencies)})")
     print(f"Fanout Latency    P50/P99 : {fanout_stats['p50']} ms / {fanout_stats['p99']} ms (N={len(fanout_latencies)})")
     print(f"Broadcast Deliveries      : {actual_broadcast_deliveries} frames (Delivery: {round(min(100.0, delivery_rate), 1)}%)")
     print(f"JSON Evidence             : {json_path}")

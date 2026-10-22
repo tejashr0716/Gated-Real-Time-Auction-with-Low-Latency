@@ -1,0 +1,39 @@
+{
+  "benchmark_type": "IN_PROCESS_COROUTINE_FANOUT_MICROBENCHMARK",
+  "description": "Measures asyncio.gather fanout overhead across in-memory VirtualClient doubles without network socket stack",
+  "timestamp_utc": "2026-10-22T17:27:02Z",
+  "subscribers": 50,
+  "rounds": 15,
+  "total_deliveries": 800,
+  "expected_deliveries": 800,
+  "delivery_rate_pct": 100.0,
+  "fanout_latency_ms": {
+    "avg": 0.387,
+    "p50": 0.385,
+    "p95": 0.458,
+    "p99": 0.458
+  },
+  "assertions": {
+    "application_message_completeness": true,
+    "p99_under_5ms": true
+  },
+  "raw_samples": {
+    "fanout_latencies_ms": [
+      0.385,
+      0.4426,
+      0.4554,
+      0.4157,
+      0.3566,
+      0.3364,
+      0.3603,
+      0.3548,
+      0.3643,
+      0.4188,
+      0.4576,
+      0.386,
+      0.3908,
+      0.3479,
+      0.3331
+    ]
+  }
+}

@@ -116,7 +116,7 @@ async def run_telemetry_benchmark(num_clients: int = 500, broadcast_rounds: int 
     print("=" * 80)
 
     # Real assertions
-    assert total_deliveries == expected_deliveries, f"Packet loss detected: {total_deliveries} != {expected_deliveries}"
+    assert total_deliveries == expected_deliveries, f"Delivery mismatch detected: {total_deliveries} != {expected_deliveries}"
     if p99 <= 5.0:
         print(f"✅ In-Process Fanout Latency Target Met: P99 {p99:.3f} ms <= 5.0 ms threshold.")
     else:
@@ -143,8 +143,11 @@ async def run_telemetry_benchmark(num_clients: int = 500, broadcast_rounds: int 
             "p99": round(p99, 3)
         },
         "assertions": {
-            "zero_packet_loss": True,
+            "application_message_completeness": True,
             "p99_under_5ms": p99 <= 5.0
+        },
+        "raw_samples": {
+            "fanout_latencies_ms": [round(x, 4) for x in fanout_latencies]
         }
     }
     with open(json_path, "w") as f:

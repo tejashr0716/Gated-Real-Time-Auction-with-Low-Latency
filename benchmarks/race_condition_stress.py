@@ -157,6 +157,9 @@ async def run_stress_test(total_bids: int = 5000, num_concurrent_workers: int = 
             "zero_gaps_contiguous_chain": True,
             "redis_final_sequence_matches_accepted": True,
             "final_price_verified": True
+        },
+        "raw_samples": {
+            "execution_latencies_ms": [round(x, 4) for x in latencies]
         }
     }
     with open(json_path, "w") as f:
