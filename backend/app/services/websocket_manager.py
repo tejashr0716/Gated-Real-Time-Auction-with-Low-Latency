@@ -59,6 +59,7 @@ class WebSocketManager:
                 "meta": meta,
                 "recent_bids": recent_bids,
                 "active_room_clients": len(self.active_rooms.get(auction_id, set())),
+                "active_ws_connections": self.total_connections,
                 "server_time_ms": int(asyncio.get_event_loop().time() * 1000)
             }
             await websocket.send_text(json.dumps(handshake))
@@ -90,7 +91,7 @@ class WebSocketManager:
             return
 
         dead_sockets = set()
-        # Non-blocking async fan-out across all 500+ clients
+        # Non-blocking async fan-out across all connected room clients
         send_coros = []
         for ws in room:
             send_coros.append(self._safe_send(ws, message_str, dead_sockets))

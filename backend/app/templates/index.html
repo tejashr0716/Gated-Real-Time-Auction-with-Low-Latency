@@ -98,7 +98,7 @@
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> WebSocket Live
             </span>
             <span class="text-slate-600">|</span>
-            <span id="telemetry-clients-count">500+ Clients Connected</span>
+            <span id="telemetry-clients-count" title="Per-process active WebSocket connections managed by this server instance">0 Clients Connected (Process)</span>
           </p>
         </div>
       </div>
@@ -315,7 +315,7 @@
             <span class="px-2 py-0.5 text-[10px] mono uppercase rounded bg-brand-neon/10 text-brand-neon border border-brand-neon/30">Zero Race Conditions</span>
           </div>
           <p class="text-xs text-slate-400 mb-4">
-            Simulate 500+ active automated trading bots hammering this auction room simultaneously. Tests Redis Lua script atomicity, sequence number monotonicity, and sub-millisecond Pub/Sub fanout.
+            Simulate concurrent automated trading bots hammering this auction room simultaneously. Tests Redis Lua script atomicity, sequence number monotonicity, and sub-millisecond Pub/Sub fanout.
           </p>
           <div class="flex flex-wrap items-center gap-3">
             <button id="btn-stress-50" onclick="runAttackSimulation(50)" class="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs mono transition border border-white/10">
@@ -899,6 +899,17 @@
       }
     }, 500);
 
+    function updateActiveClientsCount(count) {
+      const el = document.getElementById('telemetry-clients-count');
+      if (!el) return;
+      if (typeof count === 'number' && Number.isFinite(count) && count >= 0) {
+        const noun = count === 1 ? 'Client' : 'Clients';
+        el.textContent = `${count} ${noun} Connected (Process)`;
+      } else {
+        el.textContent = 'Disconnected (0 Clients)';
+      }
+    }
+
     // --- Real-time WebSocket Connection Manager ---
     function connectWebSocket(auctionId) {
       if (ws) {
@@ -929,6 +940,11 @@
               if (data.recent_bids && data.recent_bids.length > 0) {
                 recentBids = data.recent_bids;
               }
+              if (typeof data.active_ws_connections === 'number') {
+                updateActiveClientsCount(data.active_ws_connections);
+              } else if (typeof data.active_room_clients === 'number') {
+                updateActiveClientsCount(data.active_room_clients);
+              }
               updateAuctionUI();
               renderWaterfall();
             } else if (data.event === 'BID_ACCEPTED') {
@@ -939,6 +955,9 @@
                 document.getElementById('stat-p99').textContent = `${data.telemetry.p99_latency_ms.toFixed(2)} ms`;
                 document.getElementById('stat-rps').textContent = `${data.telemetry.bids_per_second.toFixed(0)} bids/s`;
                 document.getElementById('stat-total-bids').textContent = data.telemetry.total_bids_processed.toLocaleString();
+                if (typeof data.telemetry.active_ws_connections === 'number') {
+                  updateActiveClientsCount(data.telemetry.active_ws_connections);
+                }
               }
             }
           } catch (e) {}
@@ -947,13 +966,16 @@
         ws.onclose = () => {
           isConnectedToRealBackend = false;
           document.getElementById('backend-status-pill').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Standalone Showcase';
+          updateActiveClientsCount(null);
         };
 
         ws.onerror = () => {
           isConnectedToRealBackend = false;
+          updateActiveClientsCount(null);
         };
       } catch (e) {
         isConnectedToRealBackend = false;
+        updateActiveClientsCount(null);
       }
     }
 

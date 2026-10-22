@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     await ws_manager.start_heartbeat_loop()
     print("=" * 70)
     print("⚡ Gated Real-Time Auction Engine Initialized Successfully!")
-    print(f"📡 Telemetry pipeline listening for 500+ clients on ws://localhost:{settings.PORT}/ws/auctions/{{id}}")
+    print(f"📡 Telemetry pipeline listening on ws://localhost:{settings.PORT}/ws/auctions/{{id}}")
     print(f"🔒 Atomic Lua Scripts compiled and cached in Redis.")
     print("=" * 70)
     yield
