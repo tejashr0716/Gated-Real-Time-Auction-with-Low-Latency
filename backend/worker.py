@@ -57,9 +57,14 @@ class WriteBehindSyncWorker:
             for stream_name, messages in entries:
                 auction_id = stream_name.split("auction_stream:")[-1]
                 for msg_id, fields in messages:
-                    await self._persist_bid(auction_id, fields)
-                    # Trim stream up to this message ID to avoid unbounded growth
-                    await client.xdel(stream_name, msg_id)
+                    try:
+                        await self._persist_bid(auction_id, fields)
+                        # Trim stream message ONLY upon verified, transactional database persistence
+                        await client.xdel(stream_name, msg_id)
+                    except Exception as e:
+                        logger.error(f"Persistence error for {stream_name} msg {msg_id}: {e}. Retaining message in stream for retry.")
+                        # Break out of this stream to preserve strict FIFO sequence ordering
+                        break
 
         except Exception as e:
             logger.error(f"Error reading stream: {e}")
@@ -70,28 +75,24 @@ class WriteBehindSyncWorker:
         seq_id = int(fields.get("sequence_id", 0))
         amount = float(fields.get("amount", 0.0))
 
-        # 1. Insert into bids table with idempotency guard
-        try:
-            await db_service.execute(
-                """INSERT INTO bids (auction_id, bidder_id, bidder_name, sequence_id, amount, status)
-                   VALUES ($1, $2, $3, $4, $5, 'ACCEPTED')
-                   ON CONFLICT (auction_id, sequence_id) DO NOTHING""",
-                auction_id, uuid.UUID(bidder_id), bidder_name, seq_id, amount
-            )
+        # 1. Idempotently persist bid record into ledger
+        await db_service.execute(
+            """INSERT INTO bids (auction_id, bidder_id, bidder_name, sequence_id, amount, status)
+               VALUES ($1, $2, $3, $4, $5, 'ACCEPTED')
+               ON CONFLICT (auction_id, sequence_id) DO NOTHING""",
+            auction_id, uuid.UUID(bidder_id), bidder_name, seq_id, amount
+        )
 
-            # 2. Update auction record
-            await db_service.execute(
-                """UPDATE auctions
-                   SET current_price = $1, highest_bidder_id = $2, highest_bidder_name = $3,
-                       bid_count = bid_count + 1, sequence_id = $4
-                   WHERE id = $5 AND sequence_id < $4""",
-                amount, uuid.UUID(bidder_id), bidder_name, seq_id, auction_id
-            )
+        # 2. Update auction record with monotonic sequence constraint
+        await db_service.execute(
+            """UPDATE auctions
+               SET current_price = $1, highest_bidder_id = $2, highest_bidder_name = $3,
+                   bid_count = bid_count + 1, sequence_id = $4
+               WHERE id = $5 AND sequence_id < $4""",
+            amount, uuid.UUID(bidder_id), bidder_name, seq_id, auction_id
+        )
 
-            logger.info(f"Persisted bid seq #{seq_id} for {auction_id}: ${amount:,.2f} by {bidder_name}")
-
-        except Exception as e:
-            logger.error(f"Failed to persist bid {seq_id} for {auction_id}: {e}")
+        logger.info(f"Persisted bid seq #{seq_id} for {auction_id}: ${amount:,.2f} by {bidder_name}")
 
     async def record_telemetry_snapshot(self):
         try:

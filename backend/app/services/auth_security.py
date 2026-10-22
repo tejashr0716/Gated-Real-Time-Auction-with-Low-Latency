@@ -1,0 +1,86 @@
+import base64
+import hashlib
+import hmac
+import json
+import time
+from typing import Optional, Dict, Any
+from fastapi import Request, HTTPException, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.config import settings
+
+security = HTTPBearer(auto_error=False)
+
+def create_access_token(user_id: str, username: str, expires_in_seconds: int = 86400) -> str:
+    """
+    Creates an HMAC-SHA256 signed bearer token containing verified identity claims.
+    """
+    payload = {
+        "sub": str(user_id),
+        "username": username,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + expires_in_seconds
+    }
+    payload_bytes = json.dumps(payload, separators=(',', ':')).encode("utf-8")
+    raw_payload = base64.urlsafe_b64encode(payload_bytes).decode("utf-8").rstrip("=")
+    signature = hmac.new(settings.SECRET_KEY.encode("utf-8"), raw_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{raw_payload}.{signature}"
+
+def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verifies token signature and expiration, returning verified identity claims.
+    """
+    if not token or "." not in token:
+        return None
+    try:
+        parts = token.strip().split(".")
+        if len(parts) != 2:
+            return None
+        raw_payload, signature = parts[0], parts[1]
+        
+        # Verify HMAC signature in constant time
+        expected_sig = hmac.new(settings.SECRET_KEY.encode("utf-8"), raw_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+
+        # Pad base64 string
+        rem = len(raw_payload) % 4
+        padded = raw_payload + ("=" * (4 - rem) if rem > 0 else "")
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8"))
+
+        # Expiration check
+        if payload.get("exp", 0) < int(time.time()):
+            return None
+
+        return payload
+    except Exception:
+        return None
+
+async def get_current_authenticated_user(request: Request) -> Dict[str, Any]:
+    """
+    FastAPI dependency: Enforces verified authentication on protected endpoints.
+    Extracts and validates credentials from Authorization header or X-Auth-Token.
+    """
+    auth_header = request.headers.get("Authorization")
+    token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+    elif request.headers.get("X-Auth-Token"):
+        token = request.headers.get("X-Auth-Token").strip()
+
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Missing Authorization Bearer token header"
+        )
+
+    claims = verify_access_token(token)
+    if not claims or "sub" not in claims:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication failed: Invalid or expired Bearer token"
+        )
+
+    return {
+        "user_id": claims["sub"],
+        "username": claims.get("username", "AuthenticatedBidder")
+    }

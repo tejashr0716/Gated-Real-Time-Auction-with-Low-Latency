@@ -162,16 +162,14 @@ end
 -- 8. Collateral Realignment (Release Previous, Lock Incoming)
 -- ----------------------------------------------------------------------------
 if highest_bidder_id ~= "" and highest_bidder_id ~= bidder_id then
-    local prev_escrow_key = nil
-    if #KEYS >= 5 and KEYS[5] and KEYS[5] ~= "" and KEYS[5] ~= "nil" then
-        prev_escrow_key = KEYS[5]
-    else
-        prev_escrow_key = "escrow:" .. highest_bidder_id
-    end
+    local prev_escrow_key = "escrow:" .. highest_bidder_id
 
     if redis.call("EXISTS", prev_escrow_key) == 1 then
         local prev_locked = tonumber(redis.call("HGET", prev_escrow_key, "locked_collateral") or 0)
         local prev_auc_hold = tonumber(redis.call("HGET", prev_escrow_key, "locked_for_auc_" .. auction_id) or 0)
+        if prev_auc_hold == 0 then
+            prev_auc_hold = required_escrow
+        end
         local new_prev_locked = prev_locked - prev_auc_hold
         if new_prev_locked < 0 then new_prev_locked = 0 end
         redis.call("HSET", prev_escrow_key, "locked_collateral", tostring(new_prev_locked))

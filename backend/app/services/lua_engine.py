@@ -48,17 +48,13 @@ class LuaEngine:
 
         now_ms = int(time.time() * 1000)
 
-        # Keys
+        # Keys - Atomic evaluation resolves previous bidder directly inside Redis memory
         meta_key = f"auction:{auction_id}:meta"
         escrow_key = f"escrow:{bidder_id}"
         bids_list_key = f"auction_bids:{auction_id}"
         stream_key = f"auction_stream:{auction_id}"
 
-        # Fetch current highest bidder to release previous hold
-        highest_bidder_id = await client.hget(meta_key, "highest_bidder_id")
-        prev_escrow_key = f"escrow:{highest_bidder_id}" if highest_bidder_id else "escrow:nil"
-
-        keys = [meta_key, escrow_key, bids_list_key, stream_key, prev_escrow_key]
+        keys = [meta_key, escrow_key, bids_list_key, stream_key]
         args = [
             auction_id,
             bidder_id,

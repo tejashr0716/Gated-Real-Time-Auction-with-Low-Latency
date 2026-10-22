@@ -1,0 +1,55 @@
+{
+  "benchmark_type": "REAL_NETWORK_WEBSOCKET_BENCHMARK",
+  "description": "Measures real TCP WebSocket handshake, point-to-point acknowledgment, authenticated bid round-trip, and Redis Pub/Sub broadcast fanout across concurrent network clients",
+  "timestamp_utc": "2026-10-22T16:32:47.003884+00:00",
+  "git_commit_sha": "2617f854bd0570f1eb33b5dc37460acce5aebe6d",
+  "platform": {
+    "system": "Darwin",
+    "release": "27.0.0",
+    "machine": "arm64",
+    "python_version": "3.14.6"
+  },
+  "target_url": "ws://127.0.0.1:8000/ws/auctions/auc_shelby_gt500",
+  "concurrent_clients_connected": 50,
+  "failed_connections": 0,
+  "connection_handshake_latency_ms": {
+    "p50": 37.001,
+    "p95": 41.925,
+    "p99": 79.414,
+    "min": 31.305,
+    "max": 79.414
+  },
+  "point_to_point_ping_pong_latency_ms": {
+    "p50": 1.085,
+    "p95": 1.646,
+    "p99": 1.812,
+    "min": 0.023,
+    "max": 2.041,
+    "total_samples": 500,
+    "errors": 0
+  },
+  "end_to_end_authenticated_bid_ack_latency_ms": {
+    "p50": 2.298,
+    "p95": 4.097,
+    "p99": 4.097,
+    "min": 1.576,
+    "max": 4.097,
+    "total_samples": 10
+  },
+  "broadcast_fanout_latency_ms": {
+    "p50": 1.783,
+    "p95": 3.282,
+    "p99": 4.674,
+    "min": 0.694,
+    "max": 4.724,
+    "broadcast_ticks": 15,
+    "active_listeners": 49,
+    "total_broadcast_messages_delivered": 735,
+    "delivery_rate_pct": 100.0
+  },
+  "assertions_verified": {
+    "zero_connection_failures": true,
+    "zero_packet_loss": true,
+    "authenticated_bid_acks_received": true
+  }
+}

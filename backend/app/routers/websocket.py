@@ -4,6 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services.websocket_manager import ws_manager
 from app.services.lua_engine import lua_engine
 from app.services.database import db_service
+from app.services.auth_security import verify_access_token
 
 logger = logging.getLogger("auction_ws_route")
 router = APIRouter(tags=["WebSocket Real-Time Telemetry"])
@@ -25,9 +26,19 @@ async def websocket_auction_endpoint(websocket: WebSocket, auction_id: str):
             if action == "PING":
                 await websocket.send_text(json.dumps({"event": "PONG", "echo_ts": payload.get("ts")}))
             elif action == "BID":
-                # Execute bid over WebSocket low-latency path
-                bidder_id = payload.get("bidder_id", "a0000001-0000-0000-0000-000000000001")
-                bidder_name = payload.get("bidder_name", "VIP_Bidder")
+                # Enforce authentication and derive identity from verified claims
+                token = payload.get("token") or payload.get("auth_token")
+                claims = verify_access_token(token) if token else None
+                if not claims or "sub" not in claims:
+                    await websocket.send_text(json.dumps({
+                        "event": "BID_REJECTED",
+                        "code": "ERR_UNAUTHENTICATED",
+                        "msg": "Authentication required for WebSocket bid placement. Provide valid bearer token."
+                    }))
+                    continue
+
+                bidder_id = claims["sub"]
+                bidder_name = claims.get("username", "VIP_Bidder")
                 bid_amount = float(payload.get("amount", 0.0))
 
                 auction = await db_service.fetchrow("SELECT min_escrow_required FROM auctions WHERE id = $1", auction_id)

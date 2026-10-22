@@ -8,6 +8,7 @@ from app.config import settings
 from app.schemas.auth import UserLogin, TokenResponse, UserProfile, GatePassRequest, GatePassResponse
 from app.services.database import db_service
 from app.services.redis_client import redis_service
+from app.services.auth_security import create_access_token, verify_access_token
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication & Gated Access"])
 
@@ -25,9 +26,9 @@ async def login(credentials: UserLogin):
         # Fallback create or check for demo quick-start
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    # Generate session token
+    # Generate cryptographically verified Bearer session token
     user_id_str = str(user["id"])
-    token = create_gate_token(user_id_str, "global_session", int(time.time() * 1000))
+    token = create_access_token(user_id_str, user["username"])
 
     # Ensure user's escrow is mirrored in Redis for atomic sub-millisecond lookups
     escrow = await db_service.fetchrow(

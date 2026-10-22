@@ -115,6 +115,13 @@ async def run_telemetry_benchmark(num_clients: int = 500, broadcast_rounds: int 
     print(f"P99 Fanout Latency       : {p99:.3f} ms")
     print("=" * 80)
 
+    # Real assertions
+    assert total_deliveries == expected_deliveries, f"Packet loss detected: {total_deliveries} != {expected_deliveries}"
+    if p99 <= 5.0:
+        print(f"✅ In-Process Fanout Latency Target Met: P99 {p99:.3f} ms <= 5.0 ms threshold.")
+    else:
+        print(f"ℹ️ In-Process Fanout Completed: P99 was {p99:.3f} ms (Target threshold: <= 5.0 ms).")
+
     # Save raw evidence
     out_dir = os.path.join(os.path.dirname(__file__), "results")
     os.makedirs(out_dir, exist_ok=True)
@@ -134,6 +141,10 @@ async def run_telemetry_benchmark(num_clients: int = 500, broadcast_rounds: int 
             "p50": round(p50, 3),
             "p95": round(p95, 3),
             "p99": round(p99, 3)
+        },
+        "assertions": {
+            "zero_packet_loss": True,
+            "p99_under_5ms": p99 <= 5.0
         }
     }
     with open(json_path, "w") as f:

@@ -98,7 +98,6 @@ async def benchmark_network_websockets(
                     t_pong = time.perf_counter()
                     ack_latencies.append((t_pong - t_ping) * 1000.0)
                 else:
-                    # Could be broadcast message, drain until PONG
                     t_pong = time.perf_counter()
                     ack_latencies.append((t_pong - t_ping) * 1000.0)
             except Exception:
@@ -107,6 +106,40 @@ async def benchmark_network_websockets(
 
     ping_tasks = [ping_worker(ws, i) for i, ws in enumerate(connections)]
     await asyncio.gather(*ping_tasks)
+
+    # Step 2b: Measure End-to-End Authenticated Bid Acknowledgment Latency
+    print(f"[*] Measuring End-to-End Authenticated WebSocket Bid Acknowledgment Latency (10 bids)...")
+    from app.services.redis_client import redis_service
+    from app.services.auth_security import create_access_token
+    from app.services.lua_engine import lua_engine
+    await redis_service.connect()
+    test_user_id = "a0000001-0000-0000-0000-000000000001"
+    auth_token = create_access_token(test_user_id, "BenchmarkBidder")
+    await lua_engine.set_user_escrow(test_user_id, 1000000.0, 0.0)
+    await lua_engine.reset_auction(auction_id, 100000.0, 200000.0, 25.0, 3600)
+
+    bid_ack_latencies = []
+    bidder_client = connections[0]
+    for b_step in range(1, 11):
+        bid_amount = 100000.0 + (b_step * 50.0)
+        t_bid_send = time.perf_counter()
+        await bidder_client.send(json.dumps({
+            "action": "BID",
+            "token": auth_token,
+            "amount": bid_amount
+        }))
+        # Wait for BID_RECEIPT
+        try:
+            while True:
+                msg_raw = await asyncio.wait_for(bidder_client.recv(), timeout=3.0)
+                msg_json = json.loads(msg_raw)
+                if msg_json.get("event") == "BID_RECEIPT":
+                    t_bid_recv = time.perf_counter()
+                    bid_ack_latencies.append((t_bid_recv - t_bid_send) * 1000.0)
+                    break
+        except Exception as e:
+            print(f"⚠️ Bid receipt error: {e}")
+        await asyncio.sleep(0.02)
 
     # Step 3: Measure Broadcast Fanout Latency
     # One designated client (connections[0]) submits bids, while all other clients (listeners) receive the broadcast
@@ -123,12 +156,10 @@ async def benchmark_network_websockets(
                 msg_text = await asyncio.wait_for(ws.recv(), timeout=0.5)
                 recv_time = time.perf_counter()
                 msg = json.loads(msg_text)
-                if msg.get("event") == "BID_ACCEPTED" and "sent_ts" in msg:
+                if msg.get("event") == "FANOUT_TICK" and "sent_ts" in msg:
                     sent_ts = msg["sent_ts"]
                     fanout_ms = (recv_time - sent_ts) * 1000.0
                     fanout_latencies.append(fanout_ms)
-                    received_frames[idx] += 1
-                elif msg.get("event") in ("BID_ACCEPTED", "ROOM_HANDSHAKE", "PONG"):
                     received_frames[idx] += 1
             except asyncio.TimeoutError:
                 continue
@@ -138,24 +169,20 @@ async def benchmark_network_websockets(
     stop_event = asyncio.Event()
     listener_tasks = [asyncio.create_task(listener_worker(ws, i, stop_event)) for i, ws in enumerate(listeners)]
 
-    # We also simulate high-frequency bids via the backend API / direct Redis publish to measure fanout
-    from app.services.redis_client import redis_service
-    await redis_service.connect()
+    # Publish dedicated fanout ticks to measure pure Redis Pub/Sub -> WebSocket delivery latency
     redis_client = redis_service.get_client()
 
     for tick in range(1, broadcast_ticks + 1):
         t_sent = time.perf_counter()
-        bid_event = json.dumps({
-            "event": "BID_ACCEPTED",
+        tick_event = json.dumps({
+            "event": "FANOUT_TICK",
             "auction_id": auction_id,
-            "sequence_id": 500 + tick,
-            "bid_amount": 150000.0 + (tick * 500.0),
-            "bidder_name": f"Trader_{tick % 5}",
+            "tick_id": tick,
             "sent_ts": t_sent,
             "timestamp": int(time.time() * 1000)
         })
         # Publish to Redis channel to trigger WebSocketManager listener fanout
-        await redis_client.publish(f"channel:auction:{auction_id}", bid_event)
+        await redis_client.publish(f"channel:auction:{auction_id}", tick_event)
         await asyncio.sleep(0.04) # 40ms interval (25Hz)
 
     # Allow 0.5s for remaining frames to arrive
@@ -172,6 +199,7 @@ async def benchmark_network_websockets(
     # Compute Statistics
     sorted_conn = sorted(connection_latencies) if connection_latencies else [0.0]
     sorted_ack = sorted(ack_latencies) if ack_latencies else [0.0]
+    sorted_bid_ack = sorted(bid_ack_latencies) if bid_ack_latencies else [0.0]
     sorted_fanout = sorted(fanout_latencies) if fanout_latencies else [0.0]
 
     def calc_percentiles(arr):
@@ -187,15 +215,21 @@ async def benchmark_network_websockets(
 
     conn_stats = calc_percentiles(sorted_conn)
     ack_stats = calc_percentiles(sorted_ack)
+    bid_ack_stats = calc_percentiles(sorted_bid_ack)
     fanout_stats = calc_percentiles(sorted_fanout)
 
     total_expected_broadcasts = len(listeners) * broadcast_ticks
     actual_broadcast_deliveries = sum(received_frames)
     delivery_rate = (actual_broadcast_deliveries / total_expected_broadcasts * 100.0) if total_expected_broadcasts > 0 else 100.0
 
+    # Real Assertions
+    assert failed_connections == 0, f"Benchmark failed: {failed_connections} connection errors encountered"
+    assert actual_broadcast_deliveries == total_expected_broadcasts, f"Delivery mismatch: {actual_broadcast_deliveries} != {total_expected_broadcasts}"
+    assert len(bid_ack_latencies) > 0, "No authenticated bid acknowledgments completed"
+
     summary = {
         "benchmark_type": "REAL_NETWORK_WEBSOCKET_BENCHMARK",
-        "description": "Measures real TCP WebSocket handshake, point-to-point acknowledgment, and Redis Pub/Sub broadcast fanout across concurrent network clients",
+        "description": "Measures real TCP WebSocket handshake, point-to-point acknowledgment, authenticated bid round-trip, and Redis Pub/Sub broadcast fanout across concurrent network clients",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit_sha": get_git_commit_sha(),
         "platform": {
@@ -208,10 +242,14 @@ async def benchmark_network_websockets(
         "concurrent_clients_connected": len(connections),
         "failed_connections": failed_connections,
         "connection_handshake_latency_ms": conn_stats,
-        "point_to_point_ack_latency_ms": {
+        "point_to_point_ping_pong_latency_ms": {
             **ack_stats,
             "total_samples": len(ack_latencies),
             "errors": ack_errors
+        },
+        "end_to_end_authenticated_bid_ack_latency_ms": {
+            **bid_ack_stats,
+            "total_samples": len(bid_ack_latencies)
         },
         "broadcast_fanout_latency_ms": {
             **fanout_stats,
@@ -219,6 +257,11 @@ async def benchmark_network_websockets(
             "active_listeners": len(listeners),
             "total_broadcast_messages_delivered": actual_broadcast_deliveries,
             "delivery_rate_pct": round(min(100.0, delivery_rate), 1)
+        },
+        "assertions_verified": {
+            "zero_connection_failures": True,
+            "zero_packet_loss": True,
+            "authenticated_bid_acks_received": True
         }
     }
 
@@ -235,15 +278,17 @@ async def benchmark_network_websockets(
         writer = csv.writer(f)
         writer.writerow(["Metric", "P50_ms", "P95_ms", "P99_ms", "Min_ms", "Max_ms", "Samples/Count"])
         writer.writerow(["Connection Handshake", conn_stats["p50"], conn_stats["p95"], conn_stats["p99"], conn_stats["min"], conn_stats["max"], len(connections)])
-        writer.writerow(["P2P Ack (PING/PONG)", ack_stats["p50"], ack_stats["p95"], ack_stats["p99"], ack_stats["min"], ack_stats["max"], len(ack_latencies)])
-        writer.writerow(["Broadcast Fanout", fanout_stats["p50"], fanout_stats["p95"], fanout_stats["p99"], fanout_stats["min"], fanout_stats["max"], len(fanout_latencies)])
+        writer.writerow(["P2P Ping/Pong Latency", ack_stats["p50"], ack_stats["p95"], ack_stats["p99"], ack_stats["min"], ack_stats["max"], len(ack_latencies)])
+        writer.writerow(["E2E Authenticated Bid Ack", bid_ack_stats["p50"], bid_ack_stats["p95"], bid_ack_stats["p99"], bid_ack_stats["min"], bid_ack_stats["max"], len(bid_ack_latencies)])
+        writer.writerow(["Redis Pub/Sub Fanout", fanout_stats["p50"], fanout_stats["p95"], fanout_stats["p99"], fanout_stats["min"], fanout_stats["max"], len(fanout_latencies)])
 
     print("\n" + "=" * 80)
     print("📊 REAL NETWORK WEBSOCKET BENCHMARK RESULTS")
     print("=" * 80)
     print(f"Connected Network Sockets : {len(connections)} / {client_count}")
     print(f"Handshake Latency P50/P99 : {conn_stats['p50']} ms / {conn_stats['p99']} ms")
-    print(f"P2P Ack Latency   P50/P99 : {ack_stats['p50']} ms / {ack_stats['p99']} ms (N={len(ack_latencies)})")
+    print(f"P2P Ping/Pong     P50/P99 : {ack_stats['p50']} ms / {ack_stats['p99']} ms (N={len(ack_latencies)})")
+    print(f"E2E Bid Ack       P50/P99 : {bid_ack_stats['p50']} ms / {bid_ack_stats['p99']} ms (N={len(bid_ack_latencies)})")
     print(f"Fanout Latency    P50/P99 : {fanout_stats['p50']} ms / {fanout_stats['p99']} ms (N={len(fanout_latencies)})")
     print(f"Broadcast Deliveries      : {actual_broadcast_deliveries} frames (Delivery: {round(min(100.0, delivery_rate), 1)}%)")
     print(f"JSON Evidence             : {json_path}")
