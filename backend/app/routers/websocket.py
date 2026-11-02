@@ -24,7 +24,11 @@ async def websocket_auction_endpoint(websocket: WebSocket, auction_id: str):
 
             action = payload.get("action")
             if action == "PING":
-                await websocket.send_text(json.dumps({"event": "PONG", "echo_ts": payload.get("ts")}))
+                await websocket.send_text(json.dumps({
+                    "event": "PONG",
+                    "echo_marker": payload.get("echo_marker") or payload.get("echo_id"),
+                    "echo_ts": payload.get("ts")
+                }))
             elif action == "BID":
                 # Enforce authentication and derive identity from verified claims
                 token = payload.get("token") or payload.get("auth_token")
@@ -32,6 +36,7 @@ async def websocket_auction_endpoint(websocket: WebSocket, auction_id: str):
                 if not claims or "sub" not in claims:
                     await websocket.send_text(json.dumps({
                         "event": "BID_REJECTED",
+                        "req_id": payload.get("req_id"),
                         "code": "ERR_UNAUTHENTICATED",
                         "msg": "Authentication required for WebSocket bid placement. Provide valid bearer token."
                     }))
@@ -53,6 +58,7 @@ async def websocket_auction_endpoint(websocket: WebSocket, auction_id: str):
                 )
                 await websocket.send_text(json.dumps({
                     "event": "BID_RECEIPT",
+                    "req_id": payload.get("req_id"),
                     "result": result
                 }))
 

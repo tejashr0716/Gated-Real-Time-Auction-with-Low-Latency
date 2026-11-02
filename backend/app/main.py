@@ -25,6 +25,9 @@ templates = Jinja2Templates(directory=templates_dir)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Enforce security validation at application startup before any resources or background tasks are initialized
+    settings.validate_security_configuration()
+
     # Startup sequence
     await redis_service.connect()
     await db_service.connect()
@@ -32,11 +35,12 @@ async def lifespan(app: FastAPI):
     await ws_manager.start_heartbeat_loop()
     print("=" * 70)
     print("⚡ Gated Real-Time Auction Engine Initialized Successfully!")
-    print(f"📡 Telemetry pipeline listening for 500+ clients on ws://localhost:{settings.PORT}/ws/auctions/{{id}}")
+    print(f"📡 Telemetry pipeline listening on ws://localhost:{settings.PORT}/ws/auctions/{{id}}")
     print(f"🔒 Atomic Lua Scripts compiled and cached in Redis.")
     print("=" * 70)
     yield
     # Shutdown sequence
+    await ws_manager.stop_heartbeat_loop()
     await redis_service.close()
     await db_service.close()
     print("🛑 Auction Engine shutdown cleanly.")

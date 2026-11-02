@@ -1,11 +1,12 @@
 import time
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Query, Depends
+from typing import List, Optional, Dict, Any
 from app.schemas.auction import AuctionCreate, AuctionResponse
 from app.services.database import db_service
 from app.services.redis_client import redis_service
 from app.services.lua_engine import lua_engine
+from app.services.auth_security import require_admin_user
 
 router = APIRouter(prefix="/api/auctions", tags=["Auctions"])
 
@@ -93,7 +94,10 @@ async def get_auction(auction_id: str):
     return await get_auction_live_overlay(row)
 
 @router.post("/{auction_id}/reset")
-async def reset_auction_endpoint(auction_id: str):
+async def reset_auction_endpoint(
+    auction_id: str,
+    admin_user: Dict[str, Any] = Depends(require_admin_user)
+):
     row = await db_service.fetchrow("SELECT * FROM auctions WHERE id = $1", auction_id)
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
