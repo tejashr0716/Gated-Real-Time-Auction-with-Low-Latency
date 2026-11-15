@@ -1,4 +1,4 @@
-# ⚡ Gated Real-Time Auction Engine
+# ⚡ Live Online Bidding & Auction Platform
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![Redis](https://img.shields.io/badge/Redis_7.2-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
